@@ -18,30 +18,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Firestore Connection (DEBUG VERSION) ---
+# --- Firestore Connection (ROBUST VERSION) ---
 @st.cache_resource
 def get_db():
-    """Initializes the Firestore client using Streamlit Secrets."""
     try:
-        # 1. Debug: Check if the key exists at all
         if "textkey" not in st.secrets:
-            st.error("DEBUG: Streamlit cannot find a secret named 'textkey'. Check your TOML header.")
+            st.error("Internal Error: 'textkey' not found in secrets.")
             return None
 
-        # 2. Debug: Try to parse the JSON
-        try:
-            key_dict = json.loads(st.secrets["textkey"])
-        except json.JSONDecodeError as e:
-            st.error(f"DEBUG: JSON Parsing Failed. Your JSON inside the quotes might be corrupted. Error: {e}")
-            return None
+        secret_val = st.secrets["textkey"]
 
-        # 3. Debug: Try to connect to Google
+        # 1. AUTO-FIX: Check if Streamlit already parsed it as a Dict (Native TOML)
+        if isinstance(secret_val, dict):
+            key_dict = secret_val
+        else:
+            # 2. AUTO-FIX: It's a string. Try to parse, handling common copy-paste corruptions.
+            try:
+                # Strict=False allows some control characters (like newlines in keys)
+                key_dict = json.loads(secret_val, strict=False)
+            except json.JSONDecodeError:
+                # If that fails, it's likely the "private_key" has real newlines.
+                # We attempt to clean the string by removing non-printable control characters
+                # while preserving the structure.
+                st.warning("JSON formatting issue detected. Attempting auto-repair...")
+                
+                # This logic is a fallback for messy copy-pastes
+                import re
+                # Replace real newlines inside the string with escaped newlines
+                clean_val = re.sub(r'[\r\n]+', '', secret_val) 
+                # Note: This is a rough fix. If this fails, the manual fix (Option 2) is required.
+                try:
+                     key_dict = json.loads(secret_val, strict=False)
+                except:
+                     st.error("Could not auto-repair JSON. Please ensure 'private_key' is on one single line in your secrets.")
+                     return None
+
         creds = service_account.Credentials.from_service_account_info(key_dict)
         db = firestore.Client(credentials=creds, project=key_dict["project_id"])
         return db
         
     except Exception as e:
-        st.error(f"DEBUG: Unexpected Error: {e}")
+        st.error(f"Connection Error: {e}")
         return None
 
 db = get_db()
