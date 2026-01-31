@@ -16,10 +16,19 @@ st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 24px; }
     .stProgress > div > div > div > div { background-color: #4CAF50; }
-    /* Highlight the Annualized Return column */
     td:nth-child(6) { font-weight: bold; color: #4CAF50; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- Authentication Logic ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+def check_auth():
+    """Checks if the user is logged in. Returns True if admin."""
+    if st.session_state.authenticated:
+        return True
+    return False
 
 # --- Firestore Connection (ROBUST VERSION) ---
 @st.cache_resource
@@ -91,62 +100,83 @@ if not db:
 # --- Global Data Load ---
 positions_data = load_collection('positions')
 history_data = load_collection('history')
-holdings_data = load_collection('holdings') # NEW: Load Stock Inventory
+holdings_data = load_collection('holdings')
 
-# --- Sidebar: Add New Trade/Asset ---
+# --- Sidebar: Authentication & Actions ---
+st.sidebar.header("🔐 Security")
+
+if not st.session_state.authenticated:
+    with st.sidebar.expander("Admin Login", expanded=True):
+        admin_pass = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if "admin_password" in st.secrets and admin_pass == st.secrets["admin_password"]:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect Password")
+else:
+    if st.sidebar.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+    st.sidebar.success("Logged in as Admin")
+
+st.sidebar.divider()
 st.sidebar.header("➕ Portfolio Actions")
 
-# Toggle between Adding Option or Stock
-add_mode = st.sidebar.radio("Entry Type", ["Option Trade", "Stock Holding (Assignment)"], horizontal=True)
+# Only show Write Forms if Authenticated
+if check_auth():
+    add_mode = st.sidebar.radio("Entry Type", ["Option Trade", "Stock Holding (Assignment)"], horizontal=True)
 
-with st.sidebar.form("add_entry_form", clear_on_submit=True):
-    if add_mode == "Option Trade":
-        st.subheader("Add Option")
-        col1, col2 = st.columns(2)
-        ticker_in = col1.text_input("Ticker").upper()
-        strike_in = col1.number_input("Strike", min_value=0.0, step=0.5)
-        type_in = col2.selectbox("Type", ["Put", "Call"])
-        contracts_in = col2.number_input("Contracts", min_value=1, step=1)
-        premium_in = st.number_input("Premium Received (Per Share)", min_value=0.0, step=0.01)
-        expiry_in = st.date_input("Expiry Date")
-        
-        submitted = st.form_submit_button("Submit Option")
-        if submitted and ticker_in:
-            new_trade = {
-                'id': str(uuid.uuid4()),
-                'Ticker': ticker_in,
-                'Type': type_in,
-                'Strike': strike_in,
-                'Premium': premium_in,
-                'Contracts': contracts_in,
-                'Expiry': str(expiry_in), 
-                'OpenDate': str(date.today())
-            }
-            add_document('positions', new_trade)
-            st.toast("Option Saved! ☁️")
-            st.rerun()
+    with st.sidebar.form("add_entry_form", clear_on_submit=True):
+        if add_mode == "Option Trade":
+            st.subheader("Add Option")
+            col1, col2 = st.columns(2)
+            ticker_in = col1.text_input("Ticker").upper()
+            strike_in = col1.number_input("Strike", min_value=0.0, step=0.5)
+            type_in = col2.selectbox("Type", ["Put", "Call"])
+            contracts_in = col2.number_input("Contracts", min_value=1, step=1)
+            premium_in = st.number_input("Premium Received (Per Share)", min_value=0.0, step=0.01)
+            expiry_in = st.date_input("Expiry Date")
+            
+            submitted = st.form_submit_button("Submit Option")
+            if submitted and ticker_in:
+                new_trade = {
+                    'id': str(uuid.uuid4()),
+                    'Ticker': ticker_in,
+                    'Type': type_in,
+                    'Strike': strike_in,
+                    'Premium': premium_in,
+                    'Contracts': contracts_in,
+                    'Expiry': str(expiry_in), 
+                    'OpenDate': str(date.today())
+                }
+                add_document('positions', new_trade)
+                st.toast("Option Saved! ☁️")
+                st.rerun()
 
-    else:
-        st.subheader("Add Stock Inventory")
-        st.caption("Use this when you get assigned shares.")
-        col1, col2 = st.columns(2)
-        s_ticker = col1.text_input("Ticker Symbol").upper()
-        s_shares = col2.number_input("Shares Owned", min_value=1, step=100)
-        s_cost = st.number_input("Cost Basis Per Share", min_value=0.0, step=0.01, help="The price you were assigned at (Strike Price)")
-        s_date = st.date_input("Acquisition Date")
-        
-        submitted = st.form_submit_button("Add Stock")
-        if submitted and s_ticker:
-            new_holding = {
-                'id': str(uuid.uuid4()),
-                'Ticker': s_ticker,
-                'Shares': s_shares,
-                'CostPrice': s_cost,
-                'Date': str(s_date)
-            }
-            add_document('holdings', new_holding)
-            st.toast("Stock Inventory Added! ☁️")
-            st.rerun()
+        else:
+            st.subheader("Add Stock Inventory")
+            st.caption("Use this when you get assigned shares.")
+            col1, col2 = st.columns(2)
+            s_ticker = col1.text_input("Ticker Symbol").upper()
+            s_shares = col2.number_input("Shares Owned", min_value=1, step=100)
+            s_cost = st.number_input("Cost Basis Per Share", min_value=0.0, step=0.01)
+            s_date = st.date_input("Acquisition Date")
+            
+            submitted = st.form_submit_button("Add Stock")
+            if submitted and s_ticker:
+                new_holding = {
+                    'id': str(uuid.uuid4()),
+                    'Ticker': s_ticker,
+                    'Shares': s_shares,
+                    'CostPrice': s_cost,
+                    'Date': str(s_date)
+                }
+                add_document('holdings', new_holding)
+                st.toast("Stock Inventory Added! ☁️")
+                st.rerun()
+else:
+    st.sidebar.info("Login to add new trades or stocks.")
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History"])
@@ -202,7 +232,6 @@ with tab1:
                 is_itm = (row['Type'] == 'Put' and curr < row['Strike']) or \
                          (row['Type'] == 'Call' and curr > row['Strike'])
             
-            # AROC & DTE Logic
             try:
                 exp_date = datetime.strptime(row['Expiry'], '%Y-%m-%d').date()
                 dte = max(1, (exp_date - date.today()).days)
@@ -212,11 +241,9 @@ with tab1:
             total_prem = row['Premium'] * 100 * row['Contracts']
             annualized = (total_prem / collateral) * (365 / dte) * 100 if collateral > 0 else 0
             
-            # --- NEW: CHECK IF COVERED ---
-            # If it's a Call, check if we own the stock in 'holdings_data'
+            # Covered Logic
             covered_info = "Naked"
             if row['Type'] == 'Call' and holdings_data:
-                # Find matching ticker in holdings
                 matching_stock = next((h for h in holdings_data if h['Ticker'] == row['Ticker']), None)
                 if matching_stock:
                     stock_cost = matching_stock['CostPrice']
@@ -224,7 +251,6 @@ with tab1:
                     req_shares = row['Contracts'] * 100
                     
                     if shares_owned >= req_shares:
-                        # Logic: Is Strike > Stock Cost? (Profitable assignment)
                         is_profitable_assign = row['Strike'] >= stock_cost
                         icon = "✅" if is_profitable_assign else "⚠️"
                         covered_info = f"{icon} Covered (Basis ${stock_cost})"
@@ -239,7 +265,6 @@ with tab1:
         stats.columns = ['Current Price', 'DistPct', 'Is ITM', 'AROC %', 'DTE', 'Status']
         df = pd.concat([df, stats], axis=1)
 
-        # Active Options Table
         def color_risk(row):
             try:
                 if row['Is ITM']: return ['background-color: #ffcccc; color: #8B0000'] * len(row)
@@ -263,80 +288,78 @@ with tab1:
             }
         )
 
-        # 5. ACTION CENTER (ROLL & EDIT)
+        # 5. ACTION CENTER (ROLL & EDIT) - PROTECTED
         st.divider()
         st.subheader("🛠️ Trade Actions")
         
-        # Merge options for selection
-        pos_list = {f"OPTION: {r['Ticker']} ${r['Strike']} {r['Type']}": ('pos', r['id']) for _, r in df.iterrows()}
-        if holdings_data:
-            h_df_temp = pd.DataFrame(holdings_data)
-            pos_list.update({f"STOCK: {r['Ticker']} ({r['Shares']} shares)": ('hold', r['id']) for _, r in h_df_temp.iterrows()})
+        if check_auth():
+            pos_list = {f"OPTION: {r['Ticker']} ${r['Strike']} {r['Type']}": ('pos', r['id']) for _, r in df.iterrows()}
+            if holdings_data:
+                h_df_temp = pd.DataFrame(holdings_data)
+                pos_list.update({f"STOCK: {r['Ticker']} ({r['Shares']} shares)": ('hold', r['id']) for _, r in h_df_temp.iterrows()})
 
-        if pos_list:
-            selected_label = st.selectbox("Select Asset to Manage:", list(pos_list.keys()))
-            sel_type, sel_id = pos_list[selected_label]
+            if pos_list:
+                selected_label = st.selectbox("Select Asset to Manage:", list(pos_list.keys()))
+                sel_type, sel_id = pos_list[selected_label]
 
-            if sel_type == 'hold':
-                if st.button("Delete Stock Holding"):
-                    delete_document('holdings', sel_id)
-                    st.success("Stock deleted."); st.rerun()
-            else:
-                # OPTION LOGIC (Same as before)
-                selected_row = df[df['id'] == sel_id].iloc[0]
-                action_type = st.radio("Action Type", ["Close / Exit", "Roll Position"], horizontal=True)
+                if sel_type == 'hold':
+                    if st.button("Delete Stock Holding"):
+                        delete_document('holdings', sel_id)
+                        st.success("Stock deleted."); st.rerun()
+                else:
+                    selected_row = df[df['id'] == sel_id].iloc[0]
+                    action_type = st.radio("Action Type", ["Close / Exit", "Roll Position"], horizontal=True)
 
-                if action_type == "Close / Exit":
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        close_reason = st.selectbox("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
-                    with c2:
-                        if close_reason == "Buy to Close (BTC)":
-                            close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
-                        else:
-                            close_price = 0.0
-                    
-                    if st.button("Confirm Exit"):
-                        if close_reason == "Delete (Mistake)":
+                    if action_type == "Close / Exit":
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            close_reason = st.selectbox("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
+                        with c2:
+                            if close_reason == "Buy to Close (BTC)":
+                                close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
+                            else:
+                                close_price = 0.0
+                        
+                        if st.button("Confirm Exit"):
+                            if close_reason == "Delete (Mistake)":
+                                delete_document('positions', sel_id)
+                            else:
+                                profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
+                                history_record = selected_row.to_dict()
+                                history_record.update({'CloseDate': str(date.today()), 'ClosePrice': close_price, 'Reason': close_reason, 'Profit': profit})
+                                add_document('history', history_record)
+                                delete_document('positions', sel_id)
+                            st.toast("Updated!"); st.rerun()
+
+                    elif action_type == "Roll Position":
+                        st.info("🔄 Roll Logic Active")
+                        col_old, col_new = st.columns(2)
+                        with col_old:
+                            btc_price = st.number_input("Buy-to-Close (Old)", value=selected_row['Premium']*0.5)
+                        with col_new:
+                            new_expiry = st.date_input("New Expiry", value=date.today() + timedelta(days=30))
+                            new_strike = st.number_input("New Strike", value=selected_row['Strike'])
+                            new_premium = st.number_input("New Premium", value=selected_row['Premium'])
+                        
+                        if st.button("Execute Roll"):
+                            old_pnl = (selected_row['Premium'] - btc_price) * 100 * selected_row['Contracts']
+                            hist_rec = selected_row.to_dict()
+                            hist_rec.update({'CloseDate': str(date.today()), 'ClosePrice': btc_price, 'Reason': "Rolled", 'Profit': old_pnl})
+                            add_document('history', hist_rec)
                             delete_document('positions', sel_id)
-                        else:
-                            profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
-                            history_record = selected_row.to_dict()
-                            history_record.update({'CloseDate': str(date.today()), 'ClosePrice': close_price, 'Reason': close_reason, 'Profit': profit})
-                            add_document('history', history_record)
-                            delete_document('positions', sel_id)
-                        st.toast("Updated!"); st.rerun()
-
-                elif action_type == "Roll Position":
-                    st.info("🔄 Roll Logic Active")
-                    col_old, col_new = st.columns(2)
-                    with col_old:
-                        btc_price = st.number_input("Buy-to-Close (Old)", value=selected_row['Premium']*0.5)
-                    with col_new:
-                        new_expiry = st.date_input("New Expiry", value=date.today() + timedelta(days=30))
-                        new_strike = st.number_input("New Strike", value=selected_row['Strike'])
-                        new_premium = st.number_input("New Premium", value=selected_row['Premium'])
-                    
-                    if st.button("Execute Roll"):
-                        # Save Old
-                        old_pnl = (selected_row['Premium'] - btc_price) * 100 * selected_row['Contracts']
-                        hist_rec = selected_row.to_dict()
-                        hist_rec.update({'CloseDate': str(date.today()), 'ClosePrice': btc_price, 'Reason': "Rolled", 'Profit': old_pnl})
-                        add_document('history', hist_rec)
-                        delete_document('positions', sel_id)
-                        # Open New
-                        new_trade = selected_row.to_dict()
-                        new_trade.update({'id': str(uuid.uuid4()), 'Strike': new_strike, 'Premium': new_premium, 'Expiry': str(new_expiry), 'OpenDate': str(date.today())})
-                        add_document('positions', new_trade)
-                        st.balloons(); st.rerun()
+                            new_trade = selected_row.to_dict()
+                            new_trade.update({'id': str(uuid.uuid4()), 'Strike': new_strike, 'Premium': new_premium, 'Expiry': str(new_expiry), 'OpenDate': str(date.today())})
+                            add_document('positions', new_trade)
+                            st.balloons(); st.rerun()
+        else:
+            st.warning("🔒 Login in the sidebar to Manage/Edit trades.")
 
 # ==========================
 # TAB 2: CAMPAIGN ANALYSIS
 # ==========================
 with tab2:
-    st.header("📉 Total Campaign P&L (Stocks + Options)")
+    st.header("📉 Total Campaign P&L")
     
-    # 1. Gather all unique tickers
     all_tickers = set()
     if positions_data: all_tickers.update([x['Ticker'] for x in positions_data])
     if history_data: all_tickers.update([x['Ticker'] for x in history_data])
@@ -347,17 +370,12 @@ with tab2:
     else:
         campaigns = []
         for ticker in all_tickers:
-            # OPTION P&L (Realized)
             hist_trades = [h for h in history_data if h['Ticker'] == ticker]
             opt_realized = sum([h['Profit'] for h in hist_trades])
             
-            # OPTION P&L (Unrealized)
             active_opts = [p for p in positions_data if p['Ticker'] == ticker]
-            # Simple assumption: Unrealized P&L = (Premium Sold - Current Market Price of Option) * 100
-            # Since we don't have live option prices, we'll just track Premium Collected for now or 0
             opt_premium_held = sum([p['Premium'] * p['Contracts'] * 100 for p in active_opts])
             
-            # STOCK P&L (Unrealized)
             stock_holdings = [h for h in holdings_data if h['Ticker'] == ticker]
             stock_unrealized = 0
             stock_cost_basis = 0
@@ -373,13 +391,11 @@ with tab2:
             
             total_campaign_pl = opt_realized + stock_unrealized + opt_premium_held
             
-            # Adjusted Cost Basis Calculation
-            # "Net Cost" = (Stock Paid) - (All Option Profits)
             if shares_count > 0:
                 net_cost_total = stock_cost_basis - opt_realized
                 adj_cost_per_share = net_cost_total / shares_count
             else:
-                adj_cost_per_share = 0 # N/A
+                adj_cost_per_share = 0
             
             campaigns.append({
                 "Ticker": ticker,
@@ -392,30 +408,21 @@ with tab2:
             
         camp_df = pd.DataFrame(campaigns)
         
-        # Display
         cols = st.columns(3)
         for idx, row in camp_df.iterrows():
             with cols[idx % 3]:
                 with st.container(border=True):
                     st.subheader(f"{row['Ticker']}")
                     
-                    # Big P&L Number
                     color = "green" if row['Total Campaign P&L'] > 0 else "red"
                     st.markdown(f"<h3 style='color:{color}'>${row['Total Campaign P&L']:,.0f}</h3>", unsafe_allow_html=True)
                     st.caption("Total P&L (Options + Stock Growth)")
                     
                     st.divider()
                     
-                    # Details
                     if row['Shares'] > 0:
                         st.write(f"**Shares Held:** {row['Shares']}")
                         st.write(f"**Adj. Cost Basis:** :blue[${row['Adj. Cost Basis']:.2f}]")
-                        curr = get_current_price(row['Ticker'])
-                        if curr:
-                            if curr > row['Adj. Cost Basis']:
-                                st.caption("🚀 You are essentially playing with 'House Money' on the stock!")
-                            else:
-                                st.caption(f"Need ${row['Adj. Cost Basis'] - curr:.2f} more to break even.")
                     else:
                         st.write("**Strategy:** Wheel (Currently Cash Secured)")
                         st.write(f"**Realized Gains:** ${row['Option Profit (Realized)']:,.2f}")
