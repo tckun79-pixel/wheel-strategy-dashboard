@@ -26,7 +26,6 @@ def get_current_price(ticker):
 # --- Session State Initialization ---
 if 'positions' not in st.session_state:
     st.session_state.positions = [
-        # Added IDs for unique identification
         {'id': str(uuid.uuid4()), 'Ticker': 'NVDA', 'Type': 'Put', 'Strike': 115.0, 'Premium': 2.50, 'Contracts': 1, 'Expiry': date(2026, 2, 20), 'OpenDate': date(2026, 1, 15)},
         {'id': str(uuid.uuid4()), 'Ticker': 'OKLO', 'Type': 'Put', 'Strike': 18.0, 'Premium': 0.80, 'Contracts': 5, 'Expiry': date(2026, 2, 20), 'OpenDate': date(2026, 1, 18)},
     ]
@@ -105,33 +104,44 @@ with tab1:
         st.subheader("Portfolio Monitor")
         
         def color_risk(row):
-            if row['Is ITM']: return ['background-color: #ffcccc; color: #8B0000'] * len(row)
-            if row['Type'] == 'Put' and row['DistPct'] > 10: return ['background-color: #e6fffa; color: #004d40'] * len(row)
+            # Safe access to columns
+            try:
+                if row['Is ITM']: return ['background-color: #ffcccc; color: #8B0000'] * len(row)
+                if row['Type'] == 'Put' and row['DistPct'] > 10: return ['background-color: #e6fffa; color: #004d40'] * len(row)
+            except KeyError:
+                return [''] * len(row)
             return [''] * len(row)
 
         display_df = df.copy()
+        # Create a display string for distance, but keep 'DistPct' for calculations
         display_df['Dist to Strike'] = display_df.apply(
             lambda x: f"{x['DistPct']:.1f}%" if x['Type']=='Put' else f"{abs(x['DistPct']):.1f}%", axis=1
         )
         
+        # COLUMNS TO SHOW: Must include 'Is ITM' and 'DistPct' so the styler can find them!
+        cols_to_show = ['Ticker', 'Type', 'Strike', 'Current Price', 'Dist to Strike', 'Premium', 'Expiry', 'Contracts', 'Is ITM', 'DistPct']
+        
         st.dataframe(
-            display_df[['Ticker', 'Type', 'Strike', 'Current Price', 'Dist to Strike', 'Premium', 'Expiry', 'Contracts']]
+            display_df[cols_to_show]
             .style.apply(color_risk, axis=1)
             .format({'Strike': '${:.2f}', 'Current Price': '${:.2f}', 'Premium': '${:.2f}'}),
             use_container_width=True, 
-            height=300
+            height=300,
+            column_config={
+                # Hide the internal calculation columns from the UI
+                "DistPct": None,
+                "Is ITM": st.column_config.CheckboxColumn("ITM Alert", disabled=True) 
+            }
         )
 
         # 4. Action Center (Close Trades)
         st.divider()
         st.subheader("🛠️ Manage Trades (Close / Edit)")
         
-        # Create a selectbox with a readable label for each position
         position_options = {f"{row['Ticker']} ${row['Strike']} {row['Type']} (Exp: {row['Expiry']})": row['id'] for _, row in df.iterrows()}
         selected_label = st.selectbox("Select Position to Close/Manage:", list(position_options.keys()))
         selected_id = position_options[selected_label]
         
-        # Get selected position data
         selected_row = df[df['id'] == selected_id].iloc[0]
 
         c1, c2, c3 = st.columns(3)
@@ -142,37 +152,31 @@ with tab1:
             close_reason = st.radio("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
             
         with c3:
-            # Logic for closing price input
             if close_reason == "Buy to Close (BTC)":
                 close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
             elif close_reason == "Expired Worthless":
                 close_price = 0.0
                 st.write("**Price:** $0.00")
             elif close_reason == "Assignment":
-                close_price = 0.0 # Technically you keep full premium, but take stock/cash risk
+                close_price = 0.0
                 st.write("**Price:** $0.00 (Premium kept)")
             else:
                 close_price = 0.0
         
         if st.button("Confirm Exit / Update"):
             if close_reason == "Delete (Mistake)":
-                # Remove from positions, don't add to history
                 st.session_state.positions = [p for p in st.session_state.positions if p['id'] != selected_id]
                 st.success("Deleted!")
                 st.rerun()
             else:
-                # Calculate P&L
-                # Profit = (Entry Premium - Exit Price) * 100 * Contracts
                 profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
                 
-                # Create History Record
                 history_record = selected_row.to_dict()
                 history_record['CloseDate'] = date.today()
                 history_record['ClosePrice'] = close_price
                 history_record['Reason'] = close_reason
                 history_record['Profit'] = profit
                 
-                # Update State
                 st.session_state.history.append(history_record)
                 st.session_state.positions = [p for p in st.session_state.positions if p['id'] != selected_id]
                 
@@ -188,7 +192,6 @@ with tab2:
     else:
         hist_df = pd.DataFrame(st.session_state.history)
         
-        # Summary Metrics
         total_pnl = hist_df['Profit'].sum()
         win_rate = (hist_df[hist_df['Profit'] > 0].shape[0] / hist_df.shape[0]) * 100
         
