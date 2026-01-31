@@ -4,6 +4,7 @@ import yfinance as yf
 from datetime import datetime, date
 import uuid
 import json
+import re # Added for regex
 from google.cloud import firestore
 from google.oauth2 import service_account
 
@@ -15,6 +16,8 @@ st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 24px; }
     .stProgress > div > div > div > div { background-color: #4CAF50; }
+    /* Highlight the Annualized Return column */
+    td:nth-child(6) { font-weight: bold; color: #4CAF50; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -34,21 +37,14 @@ def get_db():
         else:
             # 2. AUTO-FIX: It's a string. Try to parse, handling common copy-paste corruptions.
             try:
-                # Strict=False allows some control characters (like newlines in keys)
+                # Strict=False allows some control characters
                 key_dict = json.loads(secret_val, strict=False)
             except json.JSONDecodeError:
-                # If that fails, it's likely the "private_key" has real newlines.
-                # We attempt to clean the string by removing non-printable control characters
-                # while preserving the structure.
                 st.warning("JSON formatting issue detected. Attempting auto-repair...")
-                
-                # This logic is a fallback for messy copy-pastes
-                import re
-                # Replace real newlines inside the string with escaped newlines
+                # Remove non-printable control characters
                 clean_val = re.sub(r'[\r\n]+', '', secret_val) 
-                # Note: This is a rough fix. If this fails, the manual fix (Option 2) is required.
                 try:
-                     key_dict = json.loads(secret_val, strict=False)
+                     key_dict = json.loads(clean_val, strict=False)
                 except:
                      st.error("Could not auto-repair JSON. Please ensure 'private_key' is on one single line in your secrets.")
                      return None
@@ -65,25 +61,21 @@ db = get_db()
 
 # --- Database Helper Functions ---
 def load_collection(collection_name):
-    """Fetches all documents from a Firestore collection."""
     if not db: return []
     docs = db.collection(collection_name).stream()
     items = []
     for doc in docs:
         item = doc.to_dict()
-        item['id'] = doc.id # Ensure ID is attached
+        item['id'] = doc.id
         items.append(item)
     return items
 
 def add_document(collection_name, data):
-    """Adds a new document to Firestore."""
     if not db: return
-    # Use the 'id' field as the document key if it exists, otherwise auto-generate
     doc_id = data.get('id', str(uuid.uuid4()))
     db.collection(collection_name).document(doc_id).set(data)
 
 def delete_document(collection_name, doc_id):
-    """Deletes a document from Firestore."""
     if not db: return
     db.collection(collection_name).document(doc_id).delete()
 
@@ -97,14 +89,10 @@ def get_current_price(ticker):
 
 # --- Main App Logic ---
 
-st.title("☸️ Wheel Strategy Manager (Cloud Synced)")
+st.title("☸️ Wheel Strategy Manager Pro")
 
-# CHECK: Database Connection
 if not db:
-    st.error("⚠️ Database Not Connected")
-    st.warning("To use cloud storage, you must set up your Firebase credentials in Streamlit Secrets.")
-    st.info("Check `SETUP_INSTRUCTIONS.md` for how to generate your `service-account.json`.")
-    st.stop() # Stop execution if no DB
+    st.stop()
 
 # --- Sidebar: Add New Position ---
 st.sidebar.header("➕ Add New Trade")
@@ -126,7 +114,6 @@ with st.sidebar.form("add_position_form", clear_on_submit=True):
                 'Strike': strike_in,
                 'Premium': premium_in,
                 'Contracts': contracts_in,
-                # Convert dates to string for JSON/Firestore compatibility
                 'Expiry': str(expiry_in), 
                 'OpenDate': str(date.today())
             }
@@ -135,7 +122,7 @@ with st.sidebar.form("add_position_form", clear_on_submit=True):
             st.rerun()
 
 # --- Tabs ---
-tab1, tab2 = st.tabs(["🚀 Active Positions", "📜 Trade History"])
+tab1, tab2 = st.tabs(["🚀 Active Positions", "📊 Analytics & History"])
 
 # ==========================
 # TAB 1: ACTIVE POSITIONS
@@ -154,26 +141,49 @@ with tab1:
         
         def calc_row(row):
             curr = prices.get(row['Ticker'], 0) or 0
-            if curr == 0: return pd.Series([0, 0, False])
             
-            # Distance & ITM
-            dist = ((curr - row['Strike']) / curr) * 100
-            is_itm = (row['Type'] == 'Put' and curr < row['Strike']) or \
-                     (row['Type'] == 'Call' and curr > row['Strike'])
+            # Basic Math
+            dist = 0
+            is_itm = False
+            if curr > 0:
+                dist = ((curr - row['Strike']) / curr) * 100
+                is_itm = (row['Type'] == 'Put' and curr < row['Strike']) or \
+                         (row['Type'] == 'Call' and curr > row['Strike'])
             
-            return pd.Series([curr, dist, is_itm])
+            # NEW: Efficiency Metrics (AROC)
+            # Days to Expiration (DTE)
+            try:
+                exp_date = datetime.strptime(row['Expiry'], '%Y-%m-%d').date()
+                dte = (exp_date - date.today()).days
+                dte = max(1, dte) # Avoid divide by zero
+            except:
+                dte = 30
+            
+            collateral = row['Strike'] * 100 * row['Contracts']
+            total_prem = row['Premium'] * 100 * row['Contracts']
+            
+            # (Premium / Collateral) * (365 / DTE)
+            if collateral > 0:
+                raw_return = total_prem / collateral
+                annualized = raw_return * (365 / dte) * 100
+            else:
+                annualized = 0
+            
+            return pd.Series([curr, dist, is_itm, annualized, dte])
 
         stats = df.apply(calc_row, axis=1)
-        stats.columns = ['Current Price', 'DistPct', 'Is ITM']
+        stats.columns = ['Current Price', 'DistPct', 'Is ITM', 'AROC %', 'DTE']
         df = pd.concat([df, stats], axis=1)
 
         # 2. Metrics Header
         total_open_premium = (df['Premium'] * df['Contracts'] * 100).sum()
         risk_count = df['Is ITM'].sum()
+        avg_aroc = df['AROC %'].mean()
         
-        m1, m2 = st.columns(2)
-        m1.metric("Unrealized Premium Held", f"${total_open_premium:,.0f}")
-        m2.metric("Positions at Risk (ITM)", f"{risk_count}", delta_color="inverse", delta="Alert" if risk_count > 0 else "Safe")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Unrealized Premium", f"${total_open_premium:,.0f}")
+        m2.metric("Portfolio efficiency (Avg AROC)", f"{avg_aroc:.1f}%")
+        m3.metric("At Risk (ITM)", f"{risk_count}", delta_color="inverse", delta="Alert" if risk_count > 0 else "Safe")
         
         # 3. Active Table
         st.subheader("Portfolio Monitor")
@@ -189,22 +199,25 @@ with tab1:
         display_df['Dist to Strike'] = display_df.apply(
             lambda x: f"{x['DistPct']:.1f}%" if x['Type']=='Put' else f"{abs(x['DistPct']):.1f}%", axis=1
         )
+        display_df['Annualized'] = display_df['AROC %'].apply(lambda x: f"{x:.1f}%")
         
-        cols_to_show = ['Ticker', 'Type', 'Strike', 'Current Price', 'Dist to Strike', 'Premium', 'Expiry', 'Contracts', 'Is ITM', 'DistPct']
+        cols_to_show = ['Ticker', 'Type', 'Strike', 'Current Price', 'Dist to Strike', 'Annualized', 'DTE', 'Is ITM', 'DistPct']
         
         st.dataframe(
             display_df[cols_to_show]
             .style.apply(color_risk, axis=1)
-            .format({'Strike': '${:.2f}', 'Current Price': '${:.2f}', 'Premium': '${:.2f}'}),
+            .format({'Strike': '${:.2f}', 'Current Price': '${:.2f}'}),
             use_container_width=True, 
             height=300,
             column_config={
                 "DistPct": None,
-                "Is ITM": st.column_config.CheckboxColumn("ITM Alert", disabled=True) 
+                "Is ITM": st.column_config.CheckboxColumn("ITM Alert", disabled=True),
+                "DTE": st.column_config.NumberColumn("Days Left", help="Days to Expiration"),
+                "Annualized": st.column_config.TextColumn("Yield (Ann.)", help="Annualized Return on Capital if held to expiry")
             }
         )
 
-        # 4. Action Center (Close Trades)
+        # 4. Action Center
         st.divider()
         st.subheader("🛠️ Manage Trades")
         
@@ -238,7 +251,6 @@ with tab1:
                 history_record['Reason'] = close_reason
                 history_record['Profit'] = profit
                 
-                # Transactional: Add to History -> Delete from Active
                 add_document('history', history_record)
                 delete_document('positions', selected_id)
                 
@@ -246,7 +258,7 @@ with tab1:
                 st.rerun()
 
 # ==========================
-# TAB 2: TRADE HISTORY
+# TAB 2: ANALYTICS & HISTORY
 # ==========================
 with tab2:
     history_data = load_collection('history')
@@ -256,14 +268,31 @@ with tab2:
     else:
         hist_df = pd.DataFrame(history_data)
         
+        # --- NEW: Charting Section ---
+        st.subheader("💰 Monthly Income")
+        
+        # Convert CloseDate to datetime objects
+        hist_df['CloseDateDT'] = pd.to_datetime(hist_df['CloseDate'])
+        # Create a 'Month' column (e.g., "2024-02")
+        hist_df['Month'] = hist_df['CloseDateDT'].dt.strftime('%Y-%m')
+        
+        # Group by Month and Sum Profit
+        monthly_pnl = hist_df.groupby('Month')['Profit'].sum()
+        
+        # Show Chart
+        st.bar_chart(monthly_pnl, color="#4CAF50")
+
+        # --- Summary Metrics ---
         total_pnl = hist_df['Profit'].sum()
         win_rate = (hist_df[hist_df['Profit'] > 0].shape[0] / hist_df.shape[0]) * 100
         
         h1, h2, h3 = st.columns(3)
-        h1.metric("Total Realized P&L", f"${total_pnl:,.2f}", delta=f"{total_pnl:,.2f}")
-        h2.metric("Trades Closed", len(hist_df))
+        h1.metric("Total Lifetime P&L", f"${total_pnl:,.2f}", delta=f"{total_pnl:,.2f}")
+        h2.metric("Total Trades", len(hist_df))
         h3.metric("Win Rate", f"{win_rate:.1f}%")
         
+        st.divider()
+        st.subheader("📜 Transaction Log")
         st.dataframe(
             hist_df[['CloseDate', 'Ticker', 'Type', 'Strike', 'Reason', 'Profit']]
             .sort_values(by='CloseDate', ascending=False)
