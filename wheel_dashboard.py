@@ -18,17 +18,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Firestore Connection ---
+# --- Firestore Connection (DEBUG VERSION) ---
 @st.cache_resource
 def get_db():
     """Initializes the Firestore client using Streamlit Secrets."""
     try:
-        # Construct credentials from the TOML secrets
-        key_dict = json.loads(st.secrets["textkey"])
+        # 1. Debug: Check if the key exists at all
+        if "textkey" not in st.secrets:
+            st.error("DEBUG: Streamlit cannot find a secret named 'textkey'. Check your TOML header.")
+            return None
+
+        # 2. Debug: Try to parse the JSON
+        try:
+            key_dict = json.loads(st.secrets["textkey"])
+        except json.JSONDecodeError as e:
+            st.error(f"DEBUG: JSON Parsing Failed. Your JSON inside the quotes might be corrupted. Error: {e}")
+            return None
+
+        # 3. Debug: Try to connect to Google
         creds = service_account.Credentials.from_service_account_info(key_dict)
         db = firestore.Client(credentials=creds, project=key_dict["project_id"])
         return db
+        
     except Exception as e:
+        st.error(f"DEBUG: Unexpected Error: {e}")
         return None
 
 db = get_db()
