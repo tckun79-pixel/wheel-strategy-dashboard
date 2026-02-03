@@ -25,12 +25,12 @@ if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
 def check_auth():
-    """Checks if the user is logged in. Returns True if admin."""
+    """Checks if the user is logged in."""
     if st.session_state.authenticated:
         return True
     return False
 
-# --- Firestore Connection (ROBUST VERSION) ---
+# --- Firestore Connection ---
 @st.cache_resource
 def get_db():
     try:
@@ -123,7 +123,6 @@ else:
 st.sidebar.divider()
 st.sidebar.header("➕ Portfolio Actions")
 
-# Only show Write Forms if Authenticated
 if check_auth():
     add_mode = st.sidebar.radio("Entry Type", ["Option Trade", "Stock Holding (Assignment)"], horizontal=True)
 
@@ -185,26 +184,89 @@ tab1, tab2, tab3 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "
 # TAB 1: ACTIVE POSITIONS
 # ==========================
 with tab1:
-    # --- SECTION A: STOCK HOLDINGS ---
+    
+    # ---------------------------
+    # 1. PRE-CALCULATE METRICS
+    # ---------------------------
+    total_stock_unrealized = 0
+    total_option_premium = 0
+    option_risk_count = 0
+    
+    # Calculate Stock P&L first (if data exists)
+    h_df = pd.DataFrame()
     if holdings_data:
-        st.subheader("📦 Stock Inventory (Assigned)")
         h_df = pd.DataFrame(holdings_data)
-        
-        # Get Prices
-        with st.spinner('Syncing prices...'):
-             h_prices = {t: get_current_price(t) for t in h_df['Ticker'].unique()}
-        
+        # Fetch prices for Stocks
+        with st.spinner('Syncing market data...'):
+            unique_tickers = list(set(h_df['Ticker'].unique().tolist() + [p['Ticker'] for p in positions_data]))
+            prices = {t: get_current_price(t) for t in unique_tickers}
+            
         def calc_holding(row):
-            curr = h_prices.get(row['Ticker'], 0) or 0
+            curr = prices.get(row['Ticker'], 0) or 0
             mkt_val = curr * row['Shares']
             cost_val = row['CostPrice'] * row['Shares']
             unreal_pl = mkt_val - cost_val
             pl_pct = ((curr - row['CostPrice']) / row['CostPrice']) * 100 if row['CostPrice'] > 0 else 0
             return pd.Series([curr, mkt_val, unreal_pl, pl_pct])
 
-        h_stats = h_df.apply(calc_holding, axis=1)
-        h_stats.columns = ['Current Price', 'Market Value', 'Unrealized P&L', 'Return %']
-        h_df = pd.concat([h_df, h_stats], axis=1)
+        if not h_df.empty:
+            h_stats = h_df.apply(calc_holding, axis=1)
+            h_stats.columns = ['Current Price', 'Market Value', 'Unrealized P&L', 'Return %']
+            h_df = pd.concat([h_df, h_stats], axis=1)
+            total_stock_unrealized = h_df['Unrealized P&L'].sum()
+    else:
+        # If no stocks, still need prices for options
+        with st.spinner('Syncing market data...'):
+            unique_tickers = list(set([p['Ticker'] for p in positions_data]))
+            prices = {t: get_current_price(t) for t in unique_tickers}
+
+    # Calculate Option Metrics (if data exists)
+    df = pd.DataFrame()
+    if positions_data:
+        df = pd.DataFrame(positions_data)
+        total_option_premium = (df['Premium'] * df['Contracts'] * 100).sum()
+        
+        # Determine risk count
+        for _, row in df.iterrows():
+            curr = prices.get(row['Ticker'], 0) or 0
+            is_itm = (row['Type'] == 'Put' and curr < row['Strike']) or \
+                     (row['Type'] == 'Call' and curr > row['Strike'])
+            if is_itm: option_risk_count += 1
+
+    # ---------------------------
+    # 2. DISPLAY TOP METRICS
+    # ---------------------------
+    m1, m2, m3 = st.columns(3)
+    
+    # Metric 1: Stock Inventory P&L (The new request)
+    m1.metric(
+        "Inventory Unrealized P&L", 
+        f"${total_stock_unrealized:,.2f}", 
+        delta_color="normal" # Green is good, Red is bad automatically
+    )
+    
+    # Metric 2: Option Premium (Max Potential Profit)
+    m2.metric(
+        "Unrealized Premium Held", 
+        f"${total_option_premium:,.0f}",
+        help="This is the max profit if all options expire worthless."
+    )
+    
+    # Metric 3: Risk Alert
+    m3.metric(
+        "Options At Risk (ITM)", 
+        f"{option_risk_count}", 
+        delta_color="inverse", 
+        delta="Alert" if option_risk_count > 0 else "Safe"
+    )
+    
+    st.divider()
+
+    # ---------------------------
+    # 3. STOCK INVENTORY TABLE
+    # ---------------------------
+    if not h_df.empty:
+        st.subheader("📦 Stock Inventory (Assigned)")
         
         st.dataframe(
             h_df[['Ticker', 'Shares', 'CostPrice', 'Current Price', 'Market Value', 'Unrealized P&L', 'Return %']]
@@ -215,14 +277,11 @@ with tab1:
         )
         st.divider()
 
-    # --- SECTION B: OPTIONS ---
+    # ---------------------------
+    # 4. ACTIVE OPTIONS TABLE
+    # ---------------------------
     st.subheader("⚡ Active Options")
-    if not positions_data:
-        st.info("No active options.")
-    else:
-        df = pd.DataFrame(positions_data)
-        prices = {t: get_current_price(t) for t in df['Ticker'].unique()}
-        
+    if positions_data and not df.empty:
         def calc_row(row):
             curr = prices.get(row['Ticker'], 0) or 0
             dist = 0
@@ -287,72 +346,77 @@ with tab1:
                 "Status": st.column_config.TextColumn("Collateral Status", width="medium")
             }
         )
+    else:
+        st.info("No active options.")
 
-        # 5. ACTION CENTER (ROLL & EDIT) - PROTECTED
-        st.divider()
-        st.subheader("🛠️ Trade Actions")
-        
-        if check_auth():
-            pos_list = {f"OPTION: {r['Ticker']} ${r['Strike']} {r['Type']}": ('pos', r['id']) for _, r in df.iterrows()}
-            if holdings_data:
-                h_df_temp = pd.DataFrame(holdings_data)
-                pos_list.update({f"STOCK: {r['Ticker']} ({r['Shares']} shares)": ('hold', r['id']) for _, r in h_df_temp.iterrows()})
+    # ---------------------------
+    # 5. ACTION CENTER
+    # ---------------------------
+    st.divider()
+    st.subheader("🛠️ Trade Actions")
+    
+    if check_auth():
+        pos_list = {}
+        if positions_data:
+             pos_list.update({f"OPTION: {r['Ticker']} ${r['Strike']} {r['Type']}": ('pos', r['id']) for _, r in df.iterrows()})
+        if not h_df.empty:
+             pos_list.update({f"STOCK: {r['Ticker']} ({r['Shares']} shares)": ('hold', r['id']) for _, r in h_df.iterrows()})
 
-            if pos_list:
-                selected_label = st.selectbox("Select Asset to Manage:", list(pos_list.keys()))
-                sel_type, sel_id = pos_list[selected_label]
+        if pos_list:
+            selected_label = st.selectbox("Select Asset to Manage:", list(pos_list.keys()))
+            sel_type, sel_id = pos_list[selected_label]
 
-                if sel_type == 'hold':
-                    if st.button("Delete Stock Holding"):
-                        delete_document('holdings', sel_id)
-                        st.success("Stock deleted."); st.rerun()
-                else:
-                    selected_row = df[df['id'] == sel_id].iloc[0]
-                    action_type = st.radio("Action Type", ["Close / Exit", "Roll Position"], horizontal=True)
+            if sel_type == 'hold':
+                if st.button("Delete Stock Holding"):
+                    delete_document('holdings', sel_id)
+                    st.success("Stock deleted."); st.rerun()
+            else:
+                selected_row = df[df['id'] == sel_id].iloc[0]
+                action_type = st.radio("Action Type", ["Close / Exit", "Roll Position"], horizontal=True)
 
-                    if action_type == "Close / Exit":
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            close_reason = st.selectbox("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
-                        with c2:
-                            if close_reason == "Buy to Close (BTC)":
-                                close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
-                            else:
-                                close_price = 0.0
-                        
-                        if st.button("Confirm Exit"):
-                            if close_reason == "Delete (Mistake)":
-                                delete_document('positions', sel_id)
-                            else:
-                                profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
-                                history_record = selected_row.to_dict()
-                                history_record.update({'CloseDate': str(date.today()), 'ClosePrice': close_price, 'Reason': close_reason, 'Profit': profit})
-                                add_document('history', history_record)
-                                delete_document('positions', sel_id)
-                            st.toast("Updated!"); st.rerun()
-
-                    elif action_type == "Roll Position":
-                        st.info("🔄 Roll Logic Active")
-                        col_old, col_new = st.columns(2)
-                        with col_old:
-                            btc_price = st.number_input("Buy-to-Close (Old)", value=selected_row['Premium']*0.5)
-                        with col_new:
-                            new_expiry = st.date_input("New Expiry", value=date.today() + timedelta(days=30))
-                            new_strike = st.number_input("New Strike", value=selected_row['Strike'])
-                            new_premium = st.number_input("New Premium", value=selected_row['Premium'])
-                        
-                        if st.button("Execute Roll"):
-                            old_pnl = (selected_row['Premium'] - btc_price) * 100 * selected_row['Contracts']
-                            hist_rec = selected_row.to_dict()
-                            hist_rec.update({'CloseDate': str(date.today()), 'ClosePrice': btc_price, 'Reason': "Rolled", 'Profit': old_pnl})
-                            add_document('history', hist_rec)
+                if action_type == "Close / Exit":
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        close_reason = st.selectbox("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
+                    with c2:
+                        if close_reason == "Buy to Close (BTC)":
+                            close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
+                        else:
+                            close_price = 0.0
+                    
+                    if st.button("Confirm Exit"):
+                        if close_reason == "Delete (Mistake)":
                             delete_document('positions', sel_id)
-                            new_trade = selected_row.to_dict()
-                            new_trade.update({'id': str(uuid.uuid4()), 'Strike': new_strike, 'Premium': new_premium, 'Expiry': str(new_expiry), 'OpenDate': str(date.today())})
-                            add_document('positions', new_trade)
-                            st.balloons(); st.rerun()
-        else:
-            st.warning("🔒 Login in the sidebar to Manage/Edit trades.")
+                        else:
+                            profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
+                            history_record = selected_row.to_dict()
+                            history_record.update({'CloseDate': str(date.today()), 'ClosePrice': close_price, 'Reason': close_reason, 'Profit': profit})
+                            add_document('history', history_record)
+                            delete_document('positions', sel_id)
+                        st.toast("Updated!"); st.rerun()
+
+                elif action_type == "Roll Position":
+                    st.info("🔄 Roll Logic Active")
+                    col_old, col_new = st.columns(2)
+                    with col_old:
+                        btc_price = st.number_input("Buy-to-Close (Old)", value=selected_row['Premium']*0.5)
+                    with col_new:
+                        new_expiry = st.date_input("New Expiry", value=date.today() + timedelta(days=30))
+                        new_strike = st.number_input("New Strike", value=selected_row['Strike'])
+                        new_premium = st.number_input("New Premium", value=selected_row['Premium'])
+                    
+                    if st.button("Execute Roll"):
+                        old_pnl = (selected_row['Premium'] - btc_price) * 100 * selected_row['Contracts']
+                        hist_rec = selected_row.to_dict()
+                        hist_rec.update({'CloseDate': str(date.today()), 'ClosePrice': btc_price, 'Reason': "Rolled", 'Profit': old_pnl})
+                        add_document('history', hist_rec)
+                        delete_document('positions', sel_id)
+                        new_trade = selected_row.to_dict()
+                        new_trade.update({'id': str(uuid.uuid4()), 'Strike': new_strike, 'Premium': new_premium, 'Expiry': str(new_expiry), 'OpenDate': str(date.today())})
+                        add_document('positions', new_trade)
+                        st.balloons(); st.rerun()
+    else:
+        st.warning("🔒 Login in the sidebar to Manage/Edit trades.")
 
 # ==========================
 # TAB 2: CAMPAIGN ANALYSIS
