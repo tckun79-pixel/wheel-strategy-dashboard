@@ -322,6 +322,9 @@ with tab1:
 
         stats = df.apply(calc_row, axis=1)
         stats.columns = ['Current Price', 'DistPct', 'Is ITM', 'AROC %', 'DTE', 'Status']
+        
+        # Drop existing columns if they exist to avoid duplicates before concat
+        df = df.drop(columns=[c for c in stats.columns if c in df.columns])
         df = pd.concat([df, stats], axis=1)
 
         def color_risk(row):
@@ -334,8 +337,12 @@ with tab1:
         display_df = df.copy()
         
         # Ensure DistPct and AROC % are numeric to avoid TypeError during formatting
-        display_df['DistPct'] = pd.to_numeric(display_df['DistPct'], errors='coerce').fillna(0)
-        display_df['AROC %'] = pd.to_numeric(display_df['AROC %'], errors='coerce').fillna(0)
+        # Using .iloc[:, 0] in case of any remaining duplicates, though drop(columns) should handle it
+        for col in ['DistPct', 'AROC %']:
+            col_data = display_df[col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            display_df[col] = pd.to_numeric(col_data, errors='coerce').fillna(0)
         
         display_df['Dist to Strike'] = display_df.apply(lambda x: f"{x['DistPct']:.1f}%" if x['Type']=='Put' else f"{abs(x['DistPct']):.1f}%", axis=1)
         display_df['Annualized'] = display_df['AROC %'].apply(lambda x: f"{x:.1f}%")
