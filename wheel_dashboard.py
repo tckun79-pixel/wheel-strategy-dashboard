@@ -332,6 +332,11 @@ with tab1:
             return [''] * len(row)
 
         display_df = df.copy()
+        
+        # Ensure DistPct and AROC % are numeric to avoid TypeError during formatting
+        display_df['DistPct'] = pd.to_numeric(display_df['DistPct'], errors='coerce').fillna(0)
+        display_df['AROC %'] = pd.to_numeric(display_df['AROC %'], errors='coerce').fillna(0)
+        
         display_df['Dist to Strike'] = display_df.apply(lambda x: f"{x['DistPct']:.1f}%" if x['Type']=='Put' else f"{abs(x['DistPct']):.1f}%", axis=1)
         display_df['Annualized'] = display_df['AROC %'].apply(lambda x: f"{x:.1f}%")
         
@@ -358,158 +363,86 @@ with tab1:
     if check_auth():
         pos_list = {}
         if positions_data:
-             pos_list.update({f"OPTION: {r['Ticker']} ${r['Strike']} {r['Type']}": ('pos', r['id']) for _, r in df.iterrows()})
-        if not h_df.empty:
-             pos_list.update({f"STOCK: {r['Ticker']} ({r['Shares']} shares)": ('hold', r['id']) for _, r in h_df.iterrows()})
+            for p in positions_data:
+                label = f"{p['Ticker']} {p['Type']} ${p['Strike']} Exp: {p['Expiry']}"
+                pos_list[label] = p
 
-        if pos_list:
-            selected_label = st.selectbox("Select Asset to Manage:", list(pos_list.keys()))
-            sel_type, sel_id = pos_list[selected_label]
+            selected_label = st.selectbox("Select Position to Close/Expire", list(pos_list.keys()))
+            sel = pos_list[selected_label]
+            
+            c1, c2, c3 = st.columns(3)
+            if c1.button("Mark as Expired (Full Profit)"):
+                # Save to history
+                hist_entry = sel.copy()
+                hist_entry['CloseDate'] = str(date.today())
+                hist_entry['Result'] = "Expired"
+                hist_entry['Profit'] = sel['Premium'] * 100 * sel['Contracts']
+                add_document('history', hist_entry)
+                # Remove from active
+                delete_document('positions', sel['id'])
+                st.success("Moved to History!")
+                st.rerun()
+                
+            if c2.button("Mark as Assigned"):
+                # Save to history
+                hist_entry = sel.copy()
+                hist_entry['CloseDate'] = str(date.today())
+                hist_entry['Result'] = "Assigned"
+                hist_entry['Profit'] = 0 # Assignment usually neutral in premium terms
+                add_document('history', hist_entry)
+                
+                # If Put, add to holdings
+                if sel['Type'] == 'Put':
+                    new_holding = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': sel['Ticker'],
+                        'Shares': sel['Contracts'] * 100,
+                        'CostPrice': sel['Strike'],
+                        'Date': str(date.today())
+                    }
+                    add_document('holdings', new_holding)
+                    st.toast("Stock added to Inventory!")
+                
+                # Remove from active
+                delete_document('positions', sel['id'])
+                st.success("Assignment Processed!")
+                st.rerun()
 
-            if sel_type == 'hold':
-                if st.button("Delete Stock Holding"):
-                    delete_document('holdings', sel_id)
-                    st.success("Stock deleted."); st.rerun()
-            else:
-                selected_row = df[df['id'] == sel_id].iloc[0]
-                action_type = st.radio("Action Type", ["Close / Exit", "Roll Position"], horizontal=True)
-
-                if action_type == "Close / Exit":
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        close_reason = st.selectbox("Exit Reason", ["Buy to Close (BTC)", "Expired Worthless", "Assignment", "Delete (Mistake)"])
-                    with c2:
-                        if close_reason == "Buy to Close (BTC)":
-                            close_price = st.number_input("Price Paid to Close", min_value=0.0, value=0.05, step=0.01)
-                        else:
-                            close_price = 0.0
-                    
-                    if st.button("Confirm Exit"):
-                        if close_reason == "Delete (Mistake)":
-                            delete_document('positions', sel_id)
-                        else:
-                            profit = (selected_row['Premium'] - close_price) * 100 * selected_row['Contracts']
-                            history_record = selected_row.to_dict()
-                            history_record.update({'CloseDate': str(date.today()), 'ClosePrice': close_price, 'Reason': close_reason, 'Profit': profit})
-                            add_document('history', history_record)
-                            delete_document('positions', sel_id)
-                        st.toast("Updated!"); st.rerun()
-
-                elif action_type == "Roll Position":
-                    st.info("🔄 Roll Logic Active")
-                    col_old, col_new = st.columns(2)
-                    with col_old:
-                        btc_price = st.number_input("Buy-to-Close (Old)", value=selected_row['Premium']*0.5)
-                    with col_new:
-                        new_expiry = st.date_input("New Expiry", value=date.today() + timedelta(days=30))
-                        new_strike = st.number_input("New Strike", value=selected_row['Strike'])
-                        new_premium = st.number_input("New Premium", value=selected_row['Premium'])
-                    
-                    if st.button("Execute Roll"):
-                        old_pnl = (selected_row['Premium'] - btc_price) * 100 * selected_row['Contracts']
-                        hist_rec = selected_row.to_dict()
-                        hist_rec.update({'CloseDate': str(date.today()), 'ClosePrice': btc_price, 'Reason': "Rolled", 'Profit': old_pnl})
-                        add_document('history', hist_rec)
-                        delete_document('positions', sel_id)
-                        new_trade = selected_row.to_dict()
-                        new_trade.update({'id': str(uuid.uuid4()), 'Strike': new_strike, 'Premium': new_premium, 'Expiry': str(new_expiry), 'OpenDate': str(date.today())})
-                        add_document('positions', new_trade)
-                        st.balloons(); st.rerun()
+            if c3.button("Delete (Error Entry)"):
+                delete_document('positions', sel['id'])
+                st.warning("Deleted.")
+                st.rerun()
     else:
-        st.warning("🔒 Login in the sidebar to Manage/Edit trades.")
+        st.info("Login to manage trades.")
 
 # ==========================
 # TAB 2: CAMPAIGN ANALYSIS
 # ==========================
 with tab2:
-    st.header("📉 Total Campaign P&L")
+    st.subheader("📊 Campaign Tracking")
+    st.write("Grouped view of your wheel performance per ticker.")
     
-    all_tickers = set()
-    if positions_data: all_tickers.update([x['Ticker'] for x in positions_data])
-    if history_data: all_tickers.update([x['Ticker'] for x in history_data])
-    if holdings_data: all_tickers.update([x['Ticker'] for x in holdings_data])
-    
-    if not all_tickers:
-        st.info("No data.")
+    if history_data:
+        hist_df = pd.DataFrame(history_data)
+        # Group by ticker
+        summary = hist_df.groupby('Ticker')['Profit'].sum().reset_index()
+        st.dataframe(summary, use_container_width=True)
     else:
-        campaigns = []
-        for ticker in all_tickers:
-            hist_trades = [h for h in history_data if h['Ticker'] == ticker]
-            opt_realized = sum([h['Profit'] for h in hist_trades])
-            
-            active_opts = [p for p in positions_data if p['Ticker'] == ticker]
-            opt_premium_held = sum([p['Premium'] * p['Contracts'] * 100 for p in active_opts])
-            
-            stock_holdings = [h for h in holdings_data if h['Ticker'] == ticker]
-            stock_unrealized = 0
-            stock_cost_basis = 0
-            shares_count = 0
-            
-            curr_price = get_current_price(ticker) or 0
-            
-            if stock_holdings and curr_price > 0:
-                for h in stock_holdings:
-                    shares_count += h['Shares']
-                    stock_cost_basis += (h['CostPrice'] * h['Shares'])
-                    stock_unrealized += (curr_price - h['CostPrice']) * h['Shares']
-            
-            total_campaign_pl = opt_realized + stock_unrealized + opt_premium_held
-            
-            if shares_count > 0:
-                net_cost_total = stock_cost_basis - opt_realized
-                adj_cost_per_share = net_cost_total / shares_count
-            else:
-                adj_cost_per_share = 0
-            
-            campaigns.append({
-                "Ticker": ticker,
-                "Shares": shares_count,
-                "Option Profit (Realized)": opt_realized,
-                "Stock Profit (Unrealized)": stock_unrealized,
-                "Total Campaign P&L": total_campaign_pl,
-                "Adj. Cost Basis": adj_cost_per_share
-            })
-            
-        camp_df = pd.DataFrame(campaigns)
-        
-        cols = st.columns(3)
-        for idx, row in camp_df.iterrows():
-            with cols[idx % 3]:
-                with st.container(border=True):
-                    st.subheader(f"{row['Ticker']}")
-                    
-                    color = "green" if row['Total Campaign P&L'] > 0 else "red"
-                    st.markdown(f"<h3 style='color:{color}'>${row['Total Campaign P&L']:,.0f}</h3>", unsafe_allow_html=True)
-                    st.caption("Total P&L (Options + Stock Growth)")
-                    
-                    st.divider()
-                    
-                    if row['Shares'] > 0:
-                        st.write(f"**Shares Held:** {row['Shares']}")
-                        st.write(f"**Adj. Cost Basis:** :blue[${row['Adj. Cost Basis']:.2f}]")
-                    else:
-                        st.write("**Strategy:** Wheel (Currently Cash Secured)")
-                        st.write(f"**Realized Gains:** ${row['Option Profit (Realized)']:,.2f}")
+        st.info("No history yet.")
 
 # ==========================
-# TAB 3: HISTORY
+# TAB 3: TRADE HISTORY
 # ==========================
 with tab3:
-    if not history_data:
-        st.write("No closed trades.")
+    st.subheader("📜 Completed Trades")
+    if history_data:
+        h_df_view = pd.DataFrame(history_data)
+        st.dataframe(h_df_view.sort_values('CloseDate', ascending=False), use_container_width=True)
+        
+        if check_auth():
+            if st.button("Clear History"):
+                for item in history_data:
+                    delete_document('history', item['id'])
+                st.rerun()
     else:
-        hist_df = pd.DataFrame(history_data)
-        hist_df['CloseDateDT'] = pd.to_datetime(hist_df['CloseDate'])
-        hist_df['Month'] = hist_df['CloseDateDT'].dt.strftime('%Y-%m')
-        monthly_pnl = hist_df.groupby('Month')['Profit'].sum()
-        
-        st.subheader("💰 Monthly Income")
-        st.bar_chart(monthly_pnl, color="#4CAF50")
-        
-        st.dataframe(
-            hist_df[['CloseDate', 'Ticker', 'Type', 'Strike', 'Reason', 'Profit']]
-            .sort_values(by='CloseDate', ascending=False)
-            .style.format({'Profit': '${:,.2f}', 'Strike': '${:.1f}'})
-            .applymap(lambda v: 'color: green' if v > 0 else 'color: red', subset=['Profit']),
-            use_container_width=True
-        )
+        st.info("No completed trades.")
