@@ -419,6 +419,49 @@ with tab1:
                 delete_document('positions', sel['id'])
                 st.warning("Deleted.")
                 st.rerun()
+
+            # Rollover Section
+            st.markdown("---")
+            with st.expander(f"🔄 Rollover: {selected_label}"):
+                st.write("Close this position and open a new one.")
+                r_col1, r_col2 = st.columns(2)
+                
+                # New Position Details
+                new_strike = r_col1.number_input("New Strike", value=float(sel['Strike']), step=0.5, key="roll_strike")
+                new_expiry = r_col2.date_input("New Expiry", value=date.today() + timedelta(days=7), key="roll_expiry")
+                
+                # Financials
+                close_cost = r_col1.number_input("Cost to Close (Total)", min_value=0.0, step=1.0, help="Total amount paid to buy back/close the current position.")
+                new_credit = r_col2.number_input("New Premium (Per Share)", min_value=0.0, step=0.01, value=float(sel['Premium']), help="Premium received for the new position.")
+                
+                net_credit = (new_credit * 100 * sel['Contracts']) - close_cost
+                st.info(f"Net Rollover Credit: ${net_credit:,.2f}")
+                
+                if st.button("Execute Rollover"):
+                    # 1. Close current position
+                    hist_entry = sel.copy()
+                    hist_entry['CloseDate'] = str(date.today())
+                    hist_entry['Result'] = "Rolled"
+                    # Profit for the closed leg is (Original Premium * 100 * Contracts) - Close Cost
+                    hist_entry['Profit'] = (sel['Premium'] * 100 * sel['Contracts']) - close_cost
+                    add_document('history', hist_entry)
+                    delete_document('positions', sel['id'])
+                    
+                    # 2. Open new position
+                    new_trade = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': sel['Ticker'],
+                        'Type': sel['Type'],
+                        'Strike': new_strike,
+                        'Premium': new_credit,
+                        'Contracts': sel['Contracts'],
+                        'Expiry': str(new_expiry), 
+                        'OpenDate': str(date.today())
+                    }
+                    add_document('positions', new_trade)
+                    
+                    st.success(f"Rollover complete! Net Credit: ${net_credit:,.2f}")
+                    st.rerun()
     else:
         st.info("Login to manage trades.")
 
