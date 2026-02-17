@@ -474,11 +474,41 @@ with tab2:
     
     if history_data:
         hist_df = pd.DataFrame(history_data)
-        # Group by ticker
-        summary = hist_df.groupby('Ticker')['Profit'].sum().reset_index()
-        st.dataframe(summary, use_container_width=True)
+        
+        # Ensure Profit is numeric
+        hist_df['Profit'] = pd.to_numeric(hist_df['Profit'], errors='coerce').fillna(0)
+        
+        # Group by ticker and aggregate metrics
+        summary = hist_df.groupby('Ticker').agg({
+            'Profit': ['sum', 'count'],
+            'Result': [
+                lambda x: (x == 'Expired').sum(),
+                lambda x: (x == 'Rolled').sum(),
+                lambda x: (x == 'Assigned').sum()
+            ]
+        }).reset_index()
+        
+        # Flatten multi-index columns
+        summary.columns = ['Ticker', 'Total Realized P&L', 'Trade Count', 'Expired', 'Rolled', 'Assigned']
+        
+        # Sort by P&L descending
+        summary = summary.sort_values('Total Realized P&L', ascending=False)
+        
+        # Overall Stats
+        total_p_l = summary['Total Realized P&L'].sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Realized P&L", f"${total_p_l:,.2f}")
+        c2.metric("Winning Trades", f"{summary['Expired'].sum()}")
+        c3.metric("Total Trades", f"{summary['Trade Count'].sum()}")
+        
+        st.markdown("### 🏷️ Performance by Ticker")
+        st.dataframe(
+            summary.style.format({'Total Realized P&L': '${:,.2f}'})
+            .applymap(lambda v: 'color: green' if v > 0 else 'color: red' if v < 0 else '', subset=['Total Realized P&L']),
+            use_container_width=True
+        )
     else:
-        st.info("No history yet.")
+        st.info("No trade history available for analysis.")
 
 # ==========================
 # TAB 3: TRADE HISTORY
