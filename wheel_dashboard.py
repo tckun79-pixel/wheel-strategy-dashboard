@@ -377,7 +377,7 @@ with tab1:
             selected_label = st.selectbox("Select Position to Close/Expire", list(pos_list.keys()))
             sel = pos_list[selected_label]
             
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             if c1.button("Mark as Expired (Full Profit)"):
                 # Save to history
                 hist_entry = sel.copy()
@@ -419,6 +419,20 @@ with tab1:
                 delete_document('positions', sel['id'])
                 st.warning("Deleted.")
                 st.rerun()
+
+            # Early Close (BTC/STC) Section
+            with c4.expander("💸 Close Early"):
+                close_price = st.number_input("Price Paid/Received (Per Share)", min_value=0.0, step=0.01, help="The price you paid to buy back (BTC) or received to sell (STC) the option.")
+                if st.button("Execute Early Close"):
+                    hist_entry = sel.copy()
+                    hist_entry['CloseDate'] = str(date.today())
+                    hist_entry['Result'] = "Closed Early"
+                    # Profit = (Original Premium - Close Price) * 100 * Contracts
+                    hist_entry['Profit'] = (sel['Premium'] - close_price) * 100 * sel['Contracts']
+                    add_document('history', hist_entry)
+                    delete_document('positions', sel['id'])
+                    st.success(f"Trade closed! Profit/Loss: ${hist_entry['Profit']:,.2f}")
+                    st.rerun()
 
             # Rollover Section
             st.markdown("---")
