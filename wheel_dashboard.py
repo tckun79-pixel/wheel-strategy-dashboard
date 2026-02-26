@@ -563,12 +563,9 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Check for API key in secrets
-                if "OPENAI_API_KEY" not in st.secrets:
-                    st.error("Missing OpenAI API Key. Please add 'OPENAI_API_KEY' to your Streamlit Secrets.")
-                    st.stop()
-                
-                client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+                # Using the default OpenAI client, which will automatically use the 
+                # OPENAI_API_KEY environment variable or Streamlit secrets if available.
+                client = OpenAI()
                 
                 # Prepare context
                 context = f"""
