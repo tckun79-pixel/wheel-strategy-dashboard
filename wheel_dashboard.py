@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+from openai import OpenAI
 from datetime import datetime, date, timedelta
 import uuid
 import json
@@ -178,7 +179,7 @@ else:
     st.sidebar.info("Login to add new trades or stocks.")
 
 # --- Tabs ---
-tab1, tab2, tab3 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History"])
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🤖 AI Assistant"])
 
 # ==========================
 # TAB 1: ACTIVE POSITIONS
@@ -540,3 +541,61 @@ with tab3:
                 st.rerun()
     else:
         st.info("No completed trades.")
+
+# ==========================
+# TAB 4: AI ASSISTANT
+# ==========================
+with tab4:
+    st.subheader("🤖 AI Portfolio Assistant")
+    st.write("Ask questions about your holdings, active positions, or trade history.")
+
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if prompt := st.chat_input("What would you like to know about your portfolio?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            try:
+                client = OpenAI() # Uses environment variables
+                
+                # Prepare context
+                context = f"""
+                You are a professional options trading assistant for a user named CK. 
+                CK is a test engineer with 10+ years of trading experience.
+                
+                Current Portfolio Data:
+                - Active Option Positions: {json.dumps(positions_data, indent=2)}
+                - Stock Holdings (Assigned): {json.dumps(holdings_data, indent=2)}
+                - Trade History: {json.dumps(history_data[:20], indent=2)} (Last 20 trades)
+                
+                User Profile:
+                - Based in Singapore.
+                - Interested in IT, reading, history, and travel.
+                - Vegetarian (no onion/garlic).
+                
+                Instructions:
+                - Be objective and avoid hype.
+                - Use the provided data to answer specific questions about positions.
+                - If asked about performance, refer to the realized P&L and active positions.
+                - Keep responses professional and concise.
+                """
+                
+                response = client.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    messages=[
+                        {"role": "system", "content": context},
+                        *st.session_state.messages
+                    ]
+                )
+                full_response = response.choices[0].message.content
+                st.markdown(full_response)
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+            except Exception as e:
+                st.error(f"AI Error: {e}")
