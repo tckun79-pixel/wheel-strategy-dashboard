@@ -563,9 +563,15 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Using the default OpenAI client, which will automatically use the 
-                # OPENAI_API_KEY environment variable or Streamlit secrets if available.
-                client = OpenAI()
+                # Prioritize Streamlit Secrets for the API key
+                api_key = st.secrets.get("OPENAI_API_KEY")
+                
+                if not api_key:
+                    st.error("🔑 **API Key Missing**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
+                    st.info("Go to Settings -> Secrets in Streamlit Cloud and add: `OPENAI_API_KEY = \"your-key-here\"`")
+                    st.stop()
+
+                client = OpenAI(api_key=api_key)
                 
                 # Prepare context
                 context = f"""
@@ -600,4 +606,8 @@ with tab4:
                 st.markdown(full_response)
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
             except Exception as e:
-                st.error(f"AI Error: {e}")
+                if "401" in str(e):
+                    st.error("🚫 **Invalid API Key**: The provided OpenAI API key is incorrect or expired.")
+                    st.info("Please check your key at [OpenAI API Keys](https://platform.openai.com/account/api-keys) and update it in your Streamlit Secrets.")
+                else:
+                    st.error(f"⚠️ **AI Error**: {e}")
