@@ -596,7 +596,7 @@ with tab4:
                 """
                 
                 response = client.chat.completions.create(
-                    model="gpt-4.1-mini",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": context},
                         *st.session_state.messages
@@ -609,5 +609,8 @@ with tab4:
                 if "401" in str(e):
                     st.error("🚫 **Invalid API Key**: The provided OpenAI API key is incorrect or expired.")
                     st.info("Please check your key at [OpenAI API Keys](https://platform.openai.com/account/api-keys) and update it in your Streamlit Secrets.")
+                elif "insufficient_quota" in str(e) or "429" in str(e):
+                    st.error("💳 **Insufficient Quota**: Your OpenAI account has run out of credits or reached its limit.")
+                    st.info("Please check your billing and credit balance at [OpenAI Billing](https://platform.openai.com/account/billing).")
                 else:
                     st.error(f"⚠️ **AI Error**: {e}")
