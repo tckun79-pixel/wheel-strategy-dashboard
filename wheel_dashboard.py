@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 from openai import OpenAI
 from datetime import datetime, date, timedelta
+from wheel_screener import analyze_strategy_optimized
 import uuid
 import json
 import re
@@ -179,7 +180,7 @@ else:
     st.sidebar.info("Login to add new trades or stocks.")
 
 # --- Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🤖 AI Assistant"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🤖 AI Assistant", "🔍 Screener"])
 
 # ==========================
 # TAB 1: ACTIVE POSITIONS
@@ -614,3 +615,71 @@ with tab4:
                     st.info("Please check your billing and credit balance at [OpenAI Billing](https://platform.openai.com/account/billing).")
                 else:
                     st.error(f"⚠️ **AI Error**: {e}")
+
+# ==========================
+# TAB 5: SCREENER
+# ==========================
+with tab5:
+    st.subheader("🔍 Quantitative Wheel Strategy Screener")
+    st.write("Scan the market for high-probability Cash-Secured Put and Covered Call opportunities.")
+    
+    col1, col2 = st.columns([3, 1])
+    ticker_list_input = col1.text_input("Enter Tickers (comma-separated)", value="NVDA, TSLA, AAPL, IREN, NBIS")
+    max_cap_input = col2.number_input("Max Capital ($)", value=30000, step=5000)
+    
+    if st.button("🚀 Run Analysis"):
+        with st.spinner("Analyzing real-time options data..."):
+            tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
+            analysis = analyze_strategy_optimized(tickers, float(max_cap_input))
+            
+            if analysis["results"]:
+                if analysis["max_exceeded"]:
+                    st.warning(f"⚠️ Aggregate Capital Required (${analysis['total_capital']:,.2f}) exceeds Constraint (${max_cap_input:,.2f})")
+                
+                # Main Screener Results
+                st.markdown("### 📊 Primary Screener Results")
+                res_df = pd.DataFrame(analysis["results"])
+                
+                # Main view
+                st.dataframe(
+                    res_df[['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req']]
+                    .rename(columns={
+                        'ticker': 'Ticker',
+                        'price': 'Price',
+                        'csp_strike': 'CSP Strike',
+                        'csp_premium': 'Premium',
+                        'csp_roc': 'Ann. ROC %',
+                        'capital_req': 'Cap Req'
+                    })
+                    .style.format({
+                        'Price': '${:.2f}', 
+                        'CSP Strike': '${:.2f}', 
+                        'Premium': '${:.2f}', 
+                        'Ann. ROC %': '{:.2f}%', 
+                        'Cap Req': '${:,.0f}'
+                    })
+                    .applymap(lambda v: 'color: green' if v > 15 else 'color: orange' if v > 10 else '', subset=['Ann. ROC %']),
+                    use_container_width=True
+                )
+                
+                # Risk Metrics view
+                st.markdown("### 🛡️ Risk & Full-Loop Metrics")
+                st.dataframe(
+                    res_df[['ticker', 'cc_strike', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss']]
+                    .rename(columns={
+                        'ticker': 'Ticker',
+                        'cc_strike': 'CC Strike',
+                        'blended_roc': 'Blended ROC %',
+                        'defense_roll_strike': 'Roll Strike',
+                        'stop_loss_loss': 'Max Loss (Stop)'
+                    })
+                    .style.format({
+                        'CC Strike': '${:.2f}', 
+                        'Blended ROC %': '{:.2f}%', 
+                        'Roll Strike': '${:.2f}', 
+                        'Max Loss (Stop)': '${:,.0f}'
+                    }),
+                    use_container_width=True
+                )
+            else:
+                st.error("No data found for the provided tickers. Please check the symbols and try again.")
