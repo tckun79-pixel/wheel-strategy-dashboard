@@ -565,9 +565,19 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Use default client initialization for Manus API compatibility.
-                # This will automatically use the Manus-provided API key from the environment.
-                client = OpenAI()
+                # Get the API key from Streamlit secrets or environment
+                api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+                
+                if not api_key:
+                    st.error("🔑 **API Key Not Found**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
+                    st.stop()
+                
+                # Initialize OpenAI client with Manus-compatible Base URL
+                # This ensures your Manus API key is routed correctly.
+                client = OpenAI(
+                    api_key=api_key,
+                    base_url="https://api.manus.im/v1"
+                )
                 
                 # Prepare context
                 context = f"""
