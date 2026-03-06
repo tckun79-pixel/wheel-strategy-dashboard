@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import os
 from openai import OpenAI
 from datetime import datetime, date, timedelta
 from wheel_screener import analyze_strategy_optimized
@@ -564,9 +565,15 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Use default client initialization. 
-                # This will automatically use the Manus-provided API key from the environment.
-                client = OpenAI()
+                # Attempt to get the API key from Streamlit secrets or environment
+                api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+                
+                if not api_key:
+                    st.error("🔑 **API Key Not Found**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
+                    st.info("To fix this, go to **Settings -> Secrets** in Streamlit Cloud and add: `OPENAI_API_KEY = \"your-manus-api-key\"`")
+                    st.stop()
+                
+                client = OpenAI(api_key=api_key)
                 
                 # Prepare context
                 context = f"""
