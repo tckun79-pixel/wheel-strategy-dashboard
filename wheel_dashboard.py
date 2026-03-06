@@ -598,7 +598,7 @@ with tab4:
                 """
                 
                 response = client.chat.completions.create(
-                    model="gemini-2.5-flash",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": context},
                         *st.session_state.messages
