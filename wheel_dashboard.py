@@ -564,15 +564,9 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Prioritize Streamlit Secrets for the API key
-                api_key = st.secrets.get("OPENAI_API_KEY")
-                
-                if not api_key:
-                    st.error("🔑 **API Key Missing**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
-                    st.info("Go to Settings -> Secrets in Streamlit Cloud and add: `OPENAI_API_KEY = \"your-key-here\"`")
-                    st.stop()
-
-                client = OpenAI(api_key=api_key)
+                # Use default client initialization. 
+                # This will automatically use the Manus-provided API key from the environment.
+                client = OpenAI()
                 
                 # Prepare context
                 context = f"""
