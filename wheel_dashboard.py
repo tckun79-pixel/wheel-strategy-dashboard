@@ -572,12 +572,13 @@ with tab4:
                     st.error("🔑 **API Key Not Found**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
                     st.stop()
                 
-                # Initialize OpenAI client with Manus-compatible Base URL
-                # This ensures your Manus API key is routed correctly.
-                client = OpenAI(
-                    api_key=api_key,
-                    base_url="https://api.manus.im/v1"
-                )
+                # Initialize OpenAI client. 
+                # If using a Manus key, the base_url is typically handled automatically by the environment,
+                # but for Streamlit Cloud, we'll try to use the standard initialization first.
+                if api_key.startswith("sk-manus"):
+                    client = OpenAI(api_key=api_key, base_url="https://api.manus.im/v1")
+                else:
+                    client = OpenAI(api_key=api_key)
                 
                 # Prepare context
                 context = f"""
