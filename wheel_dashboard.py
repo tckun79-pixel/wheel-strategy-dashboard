@@ -565,15 +565,9 @@ with tab4:
 
         with st.chat_message("assistant"):
             try:
-                # Attempt to get the API key from Streamlit secrets or environment
-                api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-                
-                if not api_key:
-                    st.error("🔑 **API Key Not Found**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
-                    st.info("To fix this, go to **Settings -> Secrets** in Streamlit Cloud and add: `OPENAI_API_KEY = \"your-manus-api-key\"`")
-                    st.stop()
-                
-                client = OpenAI(api_key=api_key)
+                # Use default client initialization for Manus API compatibility.
+                # This will automatically use the Manus-provided API key from the environment.
+                client = OpenAI()
                 
                 # Prepare context
                 context = f"""
@@ -598,7 +592,7 @@ with tab4:
                 """
                 
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gemini-2.5-flash",
                     messages=[
                         {"role": "system", "content": context},
                         *st.session_state.messages
