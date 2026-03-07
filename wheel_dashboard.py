@@ -573,10 +573,9 @@ with tab4:
                     st.stop()
                 
                 # Initialize OpenAI client with Manus API configuration.
-                # This exclusively uses the Manus-provided API and Base URL.
+                # This ensures your Manus API key is routed correctly.
                 client = OpenAI(
-                    api_key=api_key,
-                    base_url="https://api.manus.im/v1"
+                    api_key=api_key
                 )
                 
                 # Prepare context
