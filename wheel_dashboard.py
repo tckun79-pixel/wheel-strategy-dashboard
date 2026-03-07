@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import os
-from openai import OpenAI
 from datetime import datetime, date, timedelta
 from wheel_screener import analyze_strategy_optimized
 import uuid
@@ -181,7 +180,7 @@ else:
     st.sidebar.info("Login to add new trades or stocks.")
 
 # --- Tabs ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🤖 AI Assistant", "🔍 Screener"])
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🔍 Screener"])
 
 # ==========================
 # TAB 1: ACTIVE POSITIONS
@@ -545,85 +544,9 @@ with tab3:
         st.info("No completed trades.")
 
 # ==========================
-# TAB 4: AI ASSISTANT
+# TAB 4: SCREENER
 # ==========================
 with tab4:
-    st.subheader("🤖 AI Portfolio Assistant")
-    st.write("Ask questions about your holdings, active positions, or trade history.")
-
-    if 'messages' not in st.session_state:
-        st.session_state.messages = []
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if prompt := st.chat_input("What would you like to know about your portfolio?"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            try:
-                # Get the API key from Streamlit secrets or environment
-                api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-                
-                if not api_key:
-                    st.error("🔑 **API Key Not Found**: Please add `OPENAI_API_KEY` to your Streamlit Secrets.")
-                    st.stop()
-                
-                # Initialize OpenAI client with Manus API configuration.
-                # This ensures your Manus API key is routed correctly.
-                client = OpenAI(
-                    api_key=api_key
-                )
-                
-                # Prepare context
-                context = f"""
-                You are a professional options trading assistant for a user named CK. 
-                CK is a test engineer with 10+ years of trading experience.
-                
-                Current Portfolio Data:
-                - Active Option Positions: {json.dumps(positions_data, indent=2)}
-                - Stock Holdings (Assigned): {json.dumps(holdings_data, indent=2)}
-                - Trade History: {json.dumps(history_data[:20], indent=2)} (Last 20 trades)
-                
-                User Profile:
-                - Based in Singapore.
-                - Interested in IT, reading, history, and travel.
-                - Vegetarian (no onion/garlic).
-                
-                Instructions:
-                - Be objective and avoid hype.
-                - Use the provided data to answer specific questions about positions.
-                - If asked about performance, refer to the realized P&L and active positions.
-                - Keep responses professional and concise.
-                """
-                
-                response = client.chat.completions.create(
-                    model="gemini-2.5-flash",
-                    messages=[
-                        {"role": "system", "content": context},
-                        *st.session_state.messages
-                    ]
-                )
-                full_response = response.choices[0].message.content
-                st.markdown(full_response)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-            except Exception as e:
-                if "401" in str(e):
-                    st.error("🚫 **Invalid API Key**: The provided OpenAI API key is incorrect or expired.")
-                    st.info("Please check your key at [OpenAI API Keys](https://platform.openai.com/account/api-keys) and update it in your Streamlit Secrets.")
-                elif "insufficient_quota" in str(e) or "429" in str(e):
-                    st.error("💳 **Insufficient Quota**: Your OpenAI account has run out of credits or reached its limit.")
-                    st.info("Please check your billing and credit balance at [OpenAI Billing](https://platform.openai.com/account/billing).")
-                else:
-                    st.error(f"⚠️ **AI Error**: {e}")
-
-# ==========================
-# TAB 5: SCREENER
-# ==========================
-with tab5:
     st.subheader("🔍 Quantitative Wheel Strategy Screener")
     st.write("Scan the market for high-probability Cash-Secured Put and Covered Call opportunities.")
     
