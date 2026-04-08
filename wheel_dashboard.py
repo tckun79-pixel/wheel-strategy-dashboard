@@ -269,6 +269,54 @@ with tab1:
             use_container_width=True,
             height=150
         )
+        
+        # --- Stock Actions ---
+        if check_auth():
+            st.markdown("### 🛠️ Stock Actions")
+            stock_list = {}
+            for h in holdings_data:
+                label = f"{h['Ticker']} — {h['Shares']} shares @ ${h['CostPrice']} (Cost)"
+                stock_list[label] = h
+            
+            if stock_list:
+                selected_stock_label = st.selectbox("Select Stock to Manage", list(stock_list.keys()))
+                sel_stock = stock_list[selected_stock_label]
+                
+                c1, c2 = st.columns(2)
+                
+                # Close (Sell) action
+                if c1.button("Sell All Shares (Close)"):
+                    current_price = get_current_price(sel_stock['Ticker']) or 0
+                    cost_total = float(sel_stock['CostPrice']) * int(sel_stock['Shares'])
+                    proceeds = current_price * int(sel_stock['Shares'])
+                    realized_pl = proceeds - cost_total
+                    
+                    hist_entry = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': sel_stock['Ticker'],
+                        'Type': 'Stock',
+                        'Strike': 0,
+                        'Premium': current_price,
+                        'Contracts': sel_stock['Shares'],
+                        'Expiry': '',
+                        'OpenDate': sel_stock.get('Date', str(date.today())),
+                        'CloseDate': str(date.today()),
+                        'Result': 'Sold',
+                        'Profit': realized_pl,
+                        'CostPrice': sel_stock['CostPrice'],
+                        'Shares': sel_stock['Shares']
+                    }
+                    add_document('history', hist_entry)
+                    delete_document('holdings', sel_stock['id'])
+                    st.success(f"Sold {sel_stock['Shares']} {sel_stock['Ticker']} @ ${current_price:.2f}. Realized P&L: ${realized_pl:.2f}")
+                    st.rerun()
+                
+                # Delete entry (for errors)
+                if c2.button("Delete Entry (Erroneous)"):
+                    delete_document('holdings', sel_stock['id'])
+                    st.warning("Entry deleted.")
+                    st.rerun()
+        
         st.divider()
 
     st.subheader("⚡ Active Options")

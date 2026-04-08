@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS history (
     id TEXT PRIMARY KEY,
     "Ticker" TEXT NOT NULL,
-    "Type" TEXT TEXT,
+    "Type" TEXT,
     "Strike" NUMERIC,
     "Premium" NUMERIC,
     "Contracts" INTEGER,
@@ -50,3 +50,7 @@ ALTER TABLE holdings ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Enable all access on positions" ON positions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all access on history" ON history FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all access on holdings" ON holdings FOR ALL USING (true) WITH CHECK (true);
+
+-- Add stock-specific columns to history table (optional)
+ALTER TABLE history ADD COLUMN IF NOT EXISTS "CostPrice" NUMERIC;
+ALTER TABLE history ADD COLUMN IF NOT EXISTS "Shares" INTEGER;
