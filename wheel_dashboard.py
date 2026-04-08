@@ -586,7 +586,18 @@ with tab4:
         
         cr7, cr8 = st.columns(2)
         min_iv = cr7.number_input("Min Implied Volatility (%)", min_value=0.0, value=0.0, step=5.0, help="Minimum IV% of the option")
-        sort_by = cr8.selectbox("Sort By", ["CSP ROC %", "Blended ROC %", "DTE", "Capital Req", "Premium", "IV %"], index=0)
+        sort_by = cr8.selectbox("Sort By", ["CSP ROC %", "Blended ROC %", "DTE", "Capital Req", "Premium", "IV %", "CSP Δ", "CC Δ"], index=0)
+        
+        # Delta range filters
+        cr9, cr10 = st.columns(2)
+        with cr9:
+            st.markdown("**CSP Delta Range (abs)**")
+            min_csp_delta_abs = st.number_input("Min CSP Δ", min_value=0.0, value=0.0, step=0.05, help="Minimum absolute delta for CSP")
+            max_csp_delta_abs = st.number_input("Max CSP Δ", min_value=0.0, value=1.0, step=0.05, help="Maximum absolute delta for CSP")
+        with cr10:
+            st.markdown("**CC Delta Range**")
+            min_cc_delta = st.number_input("Min CC Δ", min_value=0.0, value=0.0, step=0.05, help="Minimum delta for CC")
+            max_cc_delta = st.number_input("Max CC Δ", min_value=0.0, value=1.0, step=0.05, help="Maximum delta for CC")
     
     if st.button("🚀 Run Analysis"):
         with st.spinner("Analyzing real-time options data..."):
@@ -613,6 +624,10 @@ with tab4:
                     mask &= (res_df['capital_req'] <= max_cap_per_trade)
                 if 'iv' in res_df.columns:
                     mask &= (res_df['iv'] >= min_iv)
+                if 'csp_delta_abs' in res_df.columns:
+                    mask &= (res_df['csp_delta_abs'] >= min_csp_delta_abs) & (res_df['csp_delta_abs'] <= max_csp_delta_abs)
+                if 'cc_delta' in res_df.columns:
+                    mask &= (res_df['cc_delta'] >= min_cc_delta) & (res_df['cc_delta'] <= max_cc_delta)
                 
                 filtered_df = res_df[mask].copy()
                 
@@ -624,6 +639,8 @@ with tab4:
                     "Capital Req": ("capital_req", False),
                     "Premium": ("csp_premium", True),
                     "IV %": ("iv", True),
+                    "CSP Δ": ("csp_delta_abs", True),
+                    "CC Δ": ("cc_delta", True),
                 }
                 sort_col, ascending = sort_map.get(sort_by, ("csp_roc", True))
                 if sort_col in filtered_df.columns:
@@ -638,7 +655,7 @@ with tab4:
                     st.markdown(f"### 📊 Screener Results — {filtered_count} / {total_count} matched")
                     
                     # Dynamically select columns that exist to avoid KeyError
-                    primary_cols = ['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv']
+                    primary_cols = ['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv', 'csp_delta_abs', 'cc_delta']
                     available_primary = [c for c in primary_cols if c in filtered_df.columns]
                     
                     rename_map = {
@@ -649,7 +666,9 @@ with tab4:
                         'csp_roc': 'CSP ROC %',
                         'capital_req': 'Cap Req',
                         'dte': 'DTE',
-                        'iv': 'IV %'
+                        'iv': 'IV %',
+                        'csp_delta_abs': 'CSP Δ',
+                        'cc_delta': 'CC Δ'
                     }
                     format_dict = {
                         'Price': '${:.2f}', 
@@ -658,7 +677,9 @@ with tab4:
                         'CSP ROC %': '{:.2f}%', 
                         'Cap Req': '${:,.0f}',
                         'DTE': '{:.0f}',
-                        'IV %': '{:.1f}%'
+                        'IV %': '{:.1f}%',
+                        'CSP Δ': '{:.2f}',
+                        'CC Δ': '{:.2f}'
                     }
                     
                     display_df = filtered_df[available_primary].rename(columns={k: v for k, v in rename_map.items() if k in available_primary})
