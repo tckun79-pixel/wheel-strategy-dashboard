@@ -582,7 +582,7 @@ with tab4:
         cr4, cr5, cr6 = st.columns(3)
         min_csp_roc = cr4.number_input("Min CSP ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized return for cash-secured put")
         min_blended_roc = cr5.number_input("Min Blended ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized blended return (full wheel loop)")
-        max_cap_per_trade = cr6.number_input("Max Capital per Trade ($)", min_value=0.0, value=30000, step=1000, help="Max capital requirement per single trade")
+        max_cap_per_trade = cr6.number_input("Max Capital per Trade ($)", min_value=0.0, value=30000.0, step=1000.0, help="Max capital requirement per single trade")
         
         cr7, cr8 = st.columns(2)
         min_iv = cr7.number_input("Min Implied Volatility (%)", min_value=0.0, value=0.0, step=5.0, help="Minimum IV% of the option")
