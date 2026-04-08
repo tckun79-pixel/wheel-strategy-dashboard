@@ -46,11 +46,30 @@ def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]
         # Calculate DTE
         dte = (datetime.strptime(best_exp, '%Y-%m-%d') - datetime.now()).days
 
+        # Compute implied volatility and IVR vs 30‑day historical volatility
+        iv = best_put.get('impliedVolatility', 0.5) * 100
+        try:
+            hist = tk.history(period="3mo")
+            if not hist.empty and len(hist) >= 30:
+                close = hist['Close']
+                returns = close.pct_change().dropna()
+                hv30_std = returns[-30:].std() * math.sqrt(252) * 100
+                hv30 = hv30_std
+            else:
+                hv30 = None
+        except Exception:
+            hv30 = None
+        
+        if hv30 and hv30 > 0:
+            ivr = (iv / hv30) * 100
+        else:
+            ivr = 0.0
+        
         return {
             "ticker": ticker,
             "price": round(price, 2),
-            "ivr": 50, # Placeholder as IVR requires historical data
-            "iv": best_put.get('impliedVolatility', 0.5) * 100,
+            "ivr": ivr,  # Implied Volatility vs HV30 ratio (%)
+            "iv": iv,
             "dte": dte,
             "csp": {
                 "strike": best_put['strike'],
