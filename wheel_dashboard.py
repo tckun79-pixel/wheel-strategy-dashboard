@@ -7,8 +7,7 @@ from wheel_screener import analyze_strategy_optimized
 import uuid
 import json
 import re
-from google.cloud import firestore
-from google.oauth2 import service_account
+from supabase import create_client, Client
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Wheel Strategy Pro", layout="wide", page_icon="☸️")
@@ -32,33 +31,34 @@ def check_auth():
         return True
     return False
 
-# --- Firestore Connection ---
+# --- Supabase Connection ---
+SUPABASE_URL = "https://xqatmutydxsxvrgnuwgm.supabase.co"
+
 @st.cache_resource
 def get_db():
     try:
-        if "textkey" not in st.secrets:
-            st.error("Internal Error: 'textkey' not found in secrets.")
+        # Try secrets first, fall back to env vars
+        supabase_url = st.secrets.get("supabase_url", SUPABASE_URL)
+        supabase_key = st.secrets.get("supabase_key", os.environ.get("SUPABASE_KEY", ""))
+
+        if not supabase_key:
+            st.error("Internal Error: 'supabase_key' not found in secrets or SUPABASE_KEY env var.")
             return None
 
-        secret_val = st.secrets["textkey"]
-        
-        if isinstance(secret_val, dict):
-            key_dict = secret_val
-        else:
-            try:
-                key_dict = json.loads(secret_val, strict=False)
-            except json.JSONDecodeError:
-                clean_val = re.sub(r'[\r\n]+', '', secret_val) 
-                try:
-                     key_dict = json.loads(clean_val, strict=False)
-                except:
-                     st.error("JSON Error in Secrets. Please check format.")
-                     return None
+        db = create_client(supabase_url, supabase_key)
 
-        creds = service_account.Credentials.from_service_account_info(key_dict)
-        db = firestore.Client(credentials=creds, project=key_dict["project_id"])
+        # Quick connectivity check
+        try:
+            db.table("positions").select("id").limit(1).execute()
+        except Exception as conn_err:
+            err_str = str(conn_err).lower()
+            if "jwt" in err_str or "unauthorized" in err_str or "apikey" in err_str:
+                st.error(f"Supabase auth error: {conn_err}")
+                return None
+            # Table might not exist yet - continue anyway
+
         return db
-        
+
     except Exception as e:
         st.error(f"Connection Error: {e}")
         return None
@@ -67,23 +67,24 @@ db = get_db()
 
 # --- Database Helpers ---
 def load_collection(collection_name):
+    """Load all rows from a Supabase table, returns list of dicts."""
     if not db: return []
-    docs = db.collection(collection_name).stream()
-    items = []
-    for doc in docs:
-        item = doc.to_dict()
-        item['id'] = doc.id
-        items.append(item)
-    return items
+    result = db.table(collection_name).select("*").execute()
+    if not result.data:
+        return []
+    return result.data
 
 def add_document(collection_name, data):
+    """Insert a document into a Supabase table."""
     if not db: return
     doc_id = data.get('id', str(uuid.uuid4()))
-    db.collection(collection_name).document(doc_id).set(data)
+    data['id'] = doc_id
+    db.table(collection_name).insert(data).execute()
 
 def delete_document(collection_name, doc_id):
+    """Delete a document by id."""
     if not db: return
-    db.collection(collection_name).document(doc_id).delete()
+    db.table(collection_name).delete().eq("id", doc_id).execute()
 
 # --- Market Data ---
 @st.cache_data(ttl=60)
@@ -187,18 +188,13 @@ tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Positions", "📉 Campaign Analys
 # ==========================
 with tab1:
     
-    # ---------------------------
-    # 1. PRE-CALCULATE METRICS
-    # ---------------------------
     total_stock_unrealized = 0
     total_option_premium = 0
     option_risk_count = 0
     
-    # Calculate Stock P&L first (if data exists)
     h_df = pd.DataFrame()
     if holdings_data:
         h_df = pd.DataFrame(holdings_data)
-        # Fetch prices for Stocks
         with st.spinner('Syncing market data...'):
             unique_tickers = list(set(h_df['Ticker'].unique().tolist() + [p['Ticker'] for p in positions_data]))
             prices = {t: get_current_price(t) for t in unique_tickers}
@@ -217,44 +213,35 @@ with tab1:
             h_df = pd.concat([h_df, h_stats], axis=1)
             total_stock_unrealized = h_df['Unrealized P&L'].sum()
     else:
-        # If no stocks, still need prices for options
         with st.spinner('Syncing market data...'):
             unique_tickers = list(set([p['Ticker'] for p in positions_data]))
             prices = {t: get_current_price(t) for t in unique_tickers}
 
-    # Calculate Option Metrics (if data exists)
     df = pd.DataFrame()
     if positions_data:
         df = pd.DataFrame(positions_data)
         total_option_premium = (df['Premium'] * df['Contracts'] * 100).sum()
         
-        # Determine risk count
         for _, row in df.iterrows():
             curr = prices.get(row['Ticker'], 0) or 0
             is_itm = (row['Type'] == 'Put' and curr < row['Strike']) or \
                      (row['Type'] == 'Call' and curr > row['Strike'])
             if is_itm: option_risk_count += 1
 
-    # ---------------------------
-    # 2. DISPLAY TOP METRICS
-    # ---------------------------
     m1, m2, m3 = st.columns(3)
     
-    # Metric 1: Stock Inventory P&L (The new request)
     m1.metric(
         "Inventory Unrealized P&L", 
         f"${total_stock_unrealized:,.2f}", 
-        delta_color="normal" # Green is good, Red is bad automatically
+        delta_color="normal"
     )
     
-    # Metric 2: Option Premium (Max Potential Profit)
     m2.metric(
         "Unrealized Premium Held", 
         f"${total_option_premium:,.0f}",
         help="This is the max profit if all options expire worthless."
     )
     
-    # Metric 3: Risk Alert
     m3.metric(
         "Options At Risk (ITM)", 
         f"{option_risk_count}", 
@@ -264,9 +251,6 @@ with tab1:
     
     st.divider()
 
-    # ---------------------------
-    # 3. STOCK INVENTORY TABLE
-    # ---------------------------
     if not h_df.empty:
         st.subheader("📦 Stock Inventory (Assigned)")
         
@@ -279,9 +263,6 @@ with tab1:
         )
         st.divider()
 
-    # ---------------------------
-    # 4. ACTIVE OPTIONS TABLE
-    # ---------------------------
     st.subheader("⚡ Active Options")
     if positions_data and not df.empty:
         def calc_row(row):
@@ -302,7 +283,6 @@ with tab1:
             total_prem = row['Premium'] * 100 * row['Contracts']
             annualized = (total_prem / collateral) * (365 / dte) * 100 if collateral > 0 else 0
             
-            # Covered Logic
             covered_info = "Naked"
             if row['Type'] == 'Call' and holdings_data:
                 matching_stock = next((h for h in holdings_data if h['Ticker'] == row['Ticker']), None)
@@ -325,7 +305,6 @@ with tab1:
         stats = df.apply(calc_row, axis=1)
         stats.columns = ['Current Price', 'DistPct', 'Is ITM', 'AROC %', 'DTE', 'Status']
         
-        # Drop existing columns if they exist to avoid duplicates before concat
         df = df.drop(columns=[c for c in stats.columns if c in df.columns])
         df = pd.concat([df, stats], axis=1)
 
@@ -338,8 +317,6 @@ with tab1:
 
         display_df = df.copy()
         
-        # Ensure DistPct and AROC % are numeric to avoid TypeError during formatting
-        # Using .iloc[:, 0] in case of any remaining duplicates, though drop(columns) should handle it
         for col in ['DistPct', 'AROC %']:
             col_data = display_df[col]
             if isinstance(col_data, pd.DataFrame):
@@ -363,9 +340,6 @@ with tab1:
     else:
         st.info("No active options.")
 
-    # ---------------------------
-    # 5. ACTION CENTER
-    # ---------------------------
     st.divider()
     st.subheader("🛠️ Trade Actions")
     
@@ -381,26 +355,22 @@ with tab1:
             
             c1, c2, c3, c4 = st.columns(4)
             if c1.button("Mark as Expired (Full Profit)"):
-                # Save to history
                 hist_entry = sel.copy()
                 hist_entry['CloseDate'] = str(date.today())
                 hist_entry['Result'] = "Expired"
                 hist_entry['Profit'] = sel['Premium'] * 100 * sel['Contracts']
                 add_document('history', hist_entry)
-                # Remove from active
                 delete_document('positions', sel['id'])
                 st.success("Moved to History!")
                 st.rerun()
                 
             if c2.button("Mark as Assigned"):
-                # Save to history
                 hist_entry = sel.copy()
                 hist_entry['CloseDate'] = str(date.today())
                 hist_entry['Result'] = "Assigned"
-                hist_entry['Profit'] = 0 # Assignment usually neutral in premium terms
+                hist_entry['Profit'] = 0
                 add_document('history', hist_entry)
                 
-                # If Put, add to holdings
                 if sel['Type'] == 'Put':
                     new_holding = {
                         'id': str(uuid.uuid4()),
@@ -412,7 +382,6 @@ with tab1:
                     add_document('holdings', new_holding)
                     st.toast("Stock added to Inventory!")
                 
-                # Remove from active
                 delete_document('positions', sel['id'])
                 st.success("Assignment Processed!")
                 st.rerun()
@@ -422,31 +391,26 @@ with tab1:
                 st.warning("Deleted.")
                 st.rerun()
 
-            # Early Close (BTC/STC) Section
             with c4.expander("💸 Close Early"):
                 close_price = st.number_input("Price Paid/Received (Per Share)", min_value=0.0, step=0.01, help="The price you paid to buy back (BTC) or received to sell (STC) the option.")
                 if st.button("Execute Early Close"):
                     hist_entry = sel.copy()
                     hist_entry['CloseDate'] = str(date.today())
                     hist_entry['Result'] = "Closed Early"
-                    # Profit = (Original Premium - Close Price) * 100 * Contracts
                     hist_entry['Profit'] = (sel['Premium'] - close_price) * 100 * sel['Contracts']
                     add_document('history', hist_entry)
                     delete_document('positions', sel['id'])
                     st.success(f"Trade closed! Profit/Loss: ${hist_entry['Profit']:,.2f}")
                     st.rerun()
 
-            # Rollover Section
             st.markdown("---")
             with st.expander(f"🔄 Rollover: {selected_label}"):
                 st.write("Close this position and open a new one.")
                 r_col1, r_col2 = st.columns(2)
                 
-                # New Position Details
                 new_strike = r_col1.number_input("New Strike", value=float(sel['Strike']), step=0.5, key="roll_strike")
                 new_expiry = r_col2.date_input("New Expiry", value=date.today() + timedelta(days=7), key="roll_expiry")
                 
-                # Financials
                 close_cost = r_col1.number_input("Cost to Close (Total)", min_value=0.0, step=1.0, help="Total amount paid to buy back/close the current position.")
                 new_credit = r_col2.number_input("New Premium (Per Share)", min_value=0.0, step=0.01, value=float(sel['Premium']), help="Premium received for the new position.")
                 
@@ -454,16 +418,13 @@ with tab1:
                 st.info(f"Net Rollover Credit: ${net_credit:,.2f}")
                 
                 if st.button("Execute Rollover"):
-                    # 1. Close current position
                     hist_entry = sel.copy()
                     hist_entry['CloseDate'] = str(date.today())
                     hist_entry['Result'] = "Rolled"
-                    # Profit for the closed leg is (Original Premium * 100 * Contracts) - Close Cost
                     hist_entry['Profit'] = (sel['Premium'] * 100 * sel['Contracts']) - close_cost
                     add_document('history', hist_entry)
                     delete_document('positions', sel['id'])
                     
-                    # 2. Open new position
                     new_trade = {
                         'id': str(uuid.uuid4()),
                         'Ticker': sel['Ticker'],
@@ -491,10 +452,8 @@ with tab2:
     if history_data:
         hist_df = pd.DataFrame(history_data)
         
-        # Ensure Profit is numeric
         hist_df['Profit'] = pd.to_numeric(hist_df['Profit'], errors='coerce').fillna(0)
         
-        # Group by ticker and aggregate metrics
         summary = hist_df.groupby('Ticker').agg({
             'Profit': ['sum', 'count'],
             'Result': [
@@ -504,13 +463,9 @@ with tab2:
             ]
         }).reset_index()
         
-        # Flatten multi-index columns
         summary.columns = ['Ticker', 'Total Realized P&L', 'Trade Count', 'Expired', 'Rolled', 'Assigned']
-        
-        # Sort by P&L descending
         summary = summary.sort_values('Total Realized P&L', ascending=False)
         
-        # Overall Stats
         total_p_l = summary['Total Realized P&L'].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Realized P&L", f"${total_p_l:,.2f}")
@@ -563,11 +518,9 @@ with tab4:
                 if analysis["max_exceeded"]:
                     st.warning(f"⚠️ Aggregate Capital Required (${analysis['total_capital']:,.2f}) exceeds Constraint (${max_cap_input:,.2f})")
                 
-                # Main Screener Results
                 st.markdown("### 📊 Primary Screener Results")
                 res_df = pd.DataFrame(analysis["results"])
                 
-                # Main view
                 st.dataframe(
                     res_df[['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req']]
                     .rename(columns={
@@ -589,7 +542,6 @@ with tab4:
                     use_container_width=True
                 )
                 
-                # Risk Metrics view
                 st.markdown("### 🛡️ Risk & Full-Loop Metrics")
                 st.dataframe(
                     res_df[['ticker', 'cc_strike', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss']]
