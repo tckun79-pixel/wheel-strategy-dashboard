@@ -661,14 +661,16 @@ with tab4:
                         'IV %': '{:.1f}%'
                     }
                     
-                    st.dataframe(
-                        filtered_df[available_primary]
-                        .rename(columns={k: v for k, v in rename_map.items() if k in available_primary})
-                        .style.format(format_dict)
-                        .background_gradient(subset=['CSP ROC %'], cmap='YlGn') if 'CSP ROC %' in filtered_df.columns else filtered_df[available_primary].style.format(format_dict),
-                        use_container_width=True,
-                        height=400
-                    )
+                        display_df = filtered_df[available_primary].rename(columns={k: v for k, v in rename_map.items() if k in available_primary})
+                        styler = display_df.style.format(format_dict)
+                        if 'CSP ROC %' in display_df.columns:
+                            styler = styler.background_gradient(subset=['CSP ROC %'], cmap='YlGn')
+                        
+                        st.dataframe(
+                            styler,
+                            use_container_width=True,
+                            height=400
+                        )
                     
                     st.markdown("### 🛡️ Risk & Full-Loop Metrics")
                     # Dynamically select available columns for risk view
