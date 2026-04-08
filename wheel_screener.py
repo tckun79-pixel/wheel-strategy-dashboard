@@ -3,6 +3,18 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Union
+import streamlit as st
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_historical_close(ticker: str) -> pd.Series:
+    """Cached 3‑month closing price history for HV30 computation."""
+    tk = yf.Ticker(ticker)
+    hist = tk.history(period="3mo")
+    if hist.empty:
+        return pd.Series(dtype=float)
+    return hist["Close"]
+
 
 def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]:
     """
@@ -49,9 +61,8 @@ def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]
         # Compute implied volatility and IVR vs 30‑day historical volatility
         iv = best_put.get('impliedVolatility', 0.5) * 100
         try:
-            hist = tk.history(period="3mo")
-            if not hist.empty and len(hist) >= 30:
-                close = hist['Close']
+            close = _fetch_historical_close(ticker)
+            if not close.empty and len(close) >= 30:
                 returns = close.pct_change().dropna()
                 hv30_std = returns[-30:].std() * math.sqrt(252) * 100
                 hv30 = hv30_std
