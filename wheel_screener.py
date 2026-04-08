@@ -16,9 +16,11 @@ def _fetch_historical_close(ticker: str) -> pd.Series:
     return hist["Close"]
 
 
-def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]:
+def get_real_market_data(ticker: str, csp_target_delta: float = None, cc_target_delta: float = None) -> Dict[str, Union[str, float, int, dict]]:
     """
     Fetches real market data using yfinance for strategy analysis.
+    csp_target_delta: desired absolute delta for CSP (default auto: 0.18 for high-price, 0.30 for low-price).
+    cc_target_delta:  desired delta for covered call (default 0.25).
     """
     ticker = ticker.upper()
     try:
@@ -45,14 +47,15 @@ def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]
         
         # Quantitative Delta Parameters
         is_high_priced = price >= 100
-        target_delta = 0.18 if is_high_priced else 0.30
+        csp_delta_target = csp_target_delta if csp_target_delta is not None else (0.18 if is_high_priced else 0.30)
+        cc_delta_target = cc_target_delta if cc_target_delta is not None else 0.25
         
         # Find best CSP strike (closest to target delta)
-        puts['delta_diff'] = abs(puts['delta'].abs() - target_delta) if 'delta' in puts.columns else abs(puts['strike'] - (price * 0.95))
+        puts['delta_diff'] = abs(puts['delta'].abs() - csp_delta_target) if 'delta' in puts.columns else abs(puts['strike'] - (price * 0.95))
         best_put = puts.loc[puts['delta_diff'].idxmin()]
         
-        # Find best CC strike (approx 15% OTM or delta 0.25)
-        calls['delta_diff'] = abs(calls['delta'].abs() - 0.25) if 'delta' in calls.columns else abs(calls['strike'] - (price * 1.10))
+        # Find best CC strike (closest to target delta)
+        calls['delta_diff'] = abs(calls['delta'].abs() - cc_delta_target) if 'delta' in calls.columns else abs(calls['strike'] - (price * 1.10))
         best_call = calls.loc[calls['delta_diff'].idxmin()]
         
         # Calculate DTE
@@ -97,15 +100,17 @@ def get_real_market_data(ticker: str) -> Dict[str, Union[str, float, int, dict]]
         print(f"Error fetching {ticker}: {e}")
         return None
 
-def analyze_strategy_optimized(tickers: List[str], max_capital: float) -> Dict:
+def analyze_strategy_optimized(tickers: List[str], max_capital: float, csp_target_delta: float = None, cc_target_delta: float = None) -> Dict:
     """
     Applies the Wheel Strategy formulas with real data.
+    csp_target_delta: desired absolute delta for CSP (default auto).
+    cc_target_delta:  desired delta for covered call (default 0.25).
     """
     results = []
     total_capital_required = 0.0
     
     for t in tickers:
-        data = get_real_market_data(t.strip())
+        data = get_real_market_data(t.strip(), csp_target_delta=csp_target_delta, cc_target_delta=cc_target_delta)
         if not data:
             continue
             

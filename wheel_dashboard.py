@@ -601,11 +601,18 @@ with tab4:
     
         # Min IVR filter
         min_ivr = st.number_input("Min IVR %", min_value=0.0, value=0.0, step=1.0, help="Minimum implied volatility rank relative to 30‑day HV")
+        
+        # Target deltas for strike selection
+        cr12, cr13 = st.columns(2)
+        with cr12:
+            csp_target_delta = st.number_input("CSP Target Δ", min_value=0.01, value=0.18, step=0.01, help="Desired absolute delta for CSP strike selection (e.g. 0.18 = deeper OTM)")
+        with cr13:
+            cc_target_delta = st.number_input("CC Target Δ", min_value=0.01, value=0.25, step=0.01, help="Desired delta for CC strike selection (e.g. 0.25 = 25 delta)")
     
     if st.button("🚀 Run Analysis"):
         with st.spinner("Analyzing real-time options data..."):
             tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
-            analysis = analyze_strategy_optimized(tickers, float(max_cap_input))
+            analysis = analyze_strategy_optimized(tickers, float(max_cap_input), csp_target_delta=csp_target_delta, cc_target_delta=cc_target_delta)
             
             if analysis["results"]:
                 if analysis["max_exceeded"]:
