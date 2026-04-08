@@ -637,53 +637,71 @@ with tab4:
                 else:
                     st.markdown(f"### 📊 Screener Results — {filtered_count} / {total_count} matched")
                     
+                    # Dynamically select columns that exist to avoid KeyError
+                    primary_cols = ['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv']
+                    available_primary = [c for c in primary_cols if c in filtered_df.columns]
+                    
+                    rename_map = {
+                        'ticker': 'Ticker',
+                        'price': 'Price',
+                        'csp_strike': 'CSP Strike',
+                        'csp_premium': 'Premium',
+                        'csp_roc': 'CSP ROC %',
+                        'capital_req': 'Cap Req',
+                        'dte': 'DTE',
+                        'iv': 'IV %'
+                    }
+                    format_dict = {
+                        'Price': '${:.2f}', 
+                        'CSP Strike': '${:.2f}', 
+                        'Premium': '${:.2f}', 
+                        'CSP ROC %': '{:.2f}%', 
+                        'Cap Req': '${:,.0f}',
+                        'DTE': '{:.0f}',
+                        'IV %': '{:.1f}%'
+                    }
+                    
                     st.dataframe(
-                        filtered_df[['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv']]
-                        .rename(columns={
-                            'ticker': 'Ticker',
-                            'price': 'Price',
-                            'csp_strike': 'CSP Strike',
-                            'csp_premium': 'Premium',
-                            'csp_roc': 'CSP ROC %',
-                            'capital_req': 'Cap Req',
-                            'dte': 'DTE',
-                            'iv': 'IV %'
-                        })
-                        .style.format({
-                            'Price': '${:.2f}', 
-                            'CSP Strike': '${:.2f}', 
-                            'Premium': '${:.2f}', 
-                            'CSP ROC %': '{:.2f}%', 
-                            'Cap Req': '${:,.0f}',
-                            'IV %': '{:.1f}%'
-                        })
-                        .background_gradient(subset=['CSP ROC %'], cmap='YlGn'),
+                        filtered_df[available_primary]
+                        .rename(columns={k: v for k, v in rename_map.items() if k in available_primary})
+                        .style.format(format_dict)
+                        .background_gradient(subset=['CSP ROC %'], cmap='YlGn') if 'CSP ROC %' in filtered_df.columns else filtered_df[available_primary].style.format(format_dict),
                         use_container_width=True,
                         height=400
                     )
                     
                     st.markdown("### 🛡️ Risk & Full-Loop Metrics")
-                    st.dataframe(
-                        filtered_df[['ticker', 'cc_strike', 'cc_premium', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss', 'capital_protected']]
-                        .rename(columns={
-                            'ticker': 'Ticker',
-                            'cc_strike': 'CC Strike',
-                            'cc_premium': 'CC Premium',
-                            'blended_roc': 'Blended ROC %',
-                            'defense_roll_strike': 'Roll Strike',
-                            'stop_loss_loss': 'Max Loss (Stop)',
-                            'capital_protected': 'Capital Protected %'
-                        })
-                        .style.format({
-                            'CC Strike': '${:.2f}', 
-                            'CC Premium': '${:.2f}',
-                            'Blended ROC %': '{:.2f}%', 
-                            'Roll Strike': '${:.2f}', 
-                            'Max Loss (Stop)': '${:,.0f}',
-                            'Capital Protected %': '{:.1f}%'
-                        }),
-                        use_container_width=True,
-                        height=400
-                    )
+                    # Dynamically select available columns for risk view
+                    risk_cols = ['ticker', 'cc_strike', 'cc_premium', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss', 'capital_protected']
+                    available_risk = [c for c in risk_cols if c in filtered_df.columns]
+                    
+                    risk_rename = {
+                        'ticker': 'Ticker',
+                        'cc_strike': 'CC Strike',
+                        'cc_premium': 'CC Premium',
+                        'blended_roc': 'Blended ROC %',
+                        'defense_roll_strike': 'Roll Strike',
+                        'stop_loss_loss': 'Max Loss (Stop)',
+                        'capital_protected': 'Capital Protected %'
+                    }
+                    risk_format = {
+                        'CC Strike': '${:.2f}', 
+                        'CC Premium': '${:.2f}',
+                        'Blended ROC %': '{:.2f}%', 
+                        'Roll Strike': '${:.2f}', 
+                        'Max Loss (Stop)': '${:,.0f}',
+                        'Capital Protected %': '{:.1f}%'
+                    }
+                    
+                    if available_risk:
+                        st.dataframe(
+                            filtered_df[available_risk]
+                            .rename(columns={k: v for k, v in risk_rename.items() if k in available_risk})
+                            .style.format(risk_format),
+                            use_container_width=True,
+                            height=400
+                        )
+                    else:
+                        st.warning("No risk metrics available.")
             else:
                 st.error("No data found for the provided tickers. Please check the symbols and try again.")
