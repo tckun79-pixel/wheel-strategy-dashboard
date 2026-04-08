@@ -254,10 +254,18 @@ with tab1:
     if not h_df.empty:
         st.subheader("📦 Stock Inventory (Assigned)")
         
+        def color_pnl(val):
+            try:
+                # Safely convert to float, return empty string for non-numeric
+                num = float(val)
+                return 'color: green' if num > 0 else 'color: red' if num < 0 else ''
+            except (ValueError, TypeError):
+                return ''
+
         st.dataframe(
             h_df[['Ticker', 'Shares', 'CostPrice', 'Current Price', 'Market Value', 'Unrealized P&L', 'Return %']]
             .style.format({'CostPrice': '${:.2f}', 'Current Price': '${:.2f}', 'Market Value': '${:,.0f}', 'Unrealized P&L': '${:,.0f}', 'Return %': '{:.2f}%'})
-            .applymap(lambda v: 'color: green' if v > 0 else 'color: red', subset=['Unrealized P&L']),
+            .map(color_pnl, subset=['Unrealized P&L']),
             use_container_width=True,
             height=150
         )
@@ -473,9 +481,16 @@ with tab2:
         c3.metric("Total Trades", f"{summary['Trade Count'].sum()}")
         
         st.markdown("### 🏷️ Performance by Ticker")
+        def color_pl(val):
+            try:
+                num = float(val)
+                return 'color: green' if num > 0 else 'color: red' if num < 0 else ''
+            except (ValueError, TypeError):
+                return ''
+
         st.dataframe(
             summary.style.format({'Total Realized P&L': '${:,.2f}'})
-            .applymap(lambda v: 'color: green' if v > 0 else 'color: red' if v < 0 else '', subset=['Total Realized P&L']),
+            .map(color_pl, subset=['Total Realized P&L']),
             use_container_width=True
         )
     else:
@@ -538,7 +553,7 @@ with tab4:
                         'Ann. ROC %': '{:.2f}%', 
                         'Cap Req': '${:,.0f}'
                     })
-                    .applymap(lambda v: 'color: green' if v > 15 else 'color: orange' if v > 10 else '', subset=['Ann. ROC %']),
+                    .map(lambda v: 'color: green' if isinstance(v, (int, float)) and v > 15 else 'color: orange' if isinstance(v, (int, float)) and v > 10 else '', subset=['Ann. ROC %']),
                     use_container_width=True
                 )
                 
