@@ -103,6 +103,8 @@ def analyze_strategy_optimized(tickers: List[str], max_capital: float) -> Dict:
             "ticker": data["ticker"],
             "price": data["price"],
             "ivr": data["ivr"],
+            "iv": data["iv"],
+            "dte": dte,
             "capital_req": capital_req,
             "csp_strike": data["csp"]["strike"],
             "csp_premium": data["csp"]["premium"],

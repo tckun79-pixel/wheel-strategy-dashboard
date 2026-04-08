@@ -570,7 +570,23 @@ with tab4:
     
     col1, col2 = st.columns([3, 1])
     ticker_list_input = col1.text_input("Enter Tickers (comma-separated)", value="NVDA, TSLA, AAPL, IREN, NBIS")
-    max_cap_input = col2.number_input("Max Capital ($)", value=30000, step=5000)
+    max_cap_input = col2.number_input("Max Total Capital ($)", value=30000, step=5000)
+    
+    # --- Screening Criteria ---
+    with st.expander("⚙️ Screening Criteria", expanded=False):
+        cr1, cr2, cr3 = st.columns(3)
+        min_dte = cr1.number_input("Min DTE", min_value=1, value=7, step=1, help="Minimum days to expiration")
+        max_dte = cr2.number_input("Max DTE", min_value=min_dte, value=45, step=1, help="Maximum days to expiration")
+        min_premium = cr3.number_input("Min Premium ($)", min_value=0.0, value=0.3, step=0.05, help="Minimum option premium per share")
+        
+        cr4, cr5, cr6 = st.columns(3)
+        min_csp_roc = cr4.number_input("Min CSP ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized return for cash-secured put")
+        min_blended_roc = cr5.number_input("Min Blended ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized blended return (full wheel loop)")
+        max_cap_per_trade = cr6.number_input("Max Capital per Trade ($)", min_value=0.0, value=30000, step=1000, help="Max capital requirement per single trade")
+        
+        cr7, cr8 = st.columns(2)
+        min_iv = cr7.number_input("Min Implied Volatility (%)", min_value=0.0, value=0.0, step=5.0, help="Minimum IV% of the option")
+        sort_by = cr8.selectbox("Sort By", ["CSP ROC %", "Blended ROC %", "DTE", "Capital Req", "Premium", "IV %"], index=0)
     
     if st.button("🚀 Run Analysis"):
         with st.spinner("Analyzing real-time options data..."):
@@ -581,47 +597,93 @@ with tab4:
                 if analysis["max_exceeded"]:
                     st.warning(f"⚠️ Aggregate Capital Required (${analysis['total_capital']:,.2f}) exceeds Constraint (${max_cap_input:,.2f})")
                 
-                st.markdown("### 📊 Primary Screener Results")
                 res_df = pd.DataFrame(analysis["results"])
                 
-                st.dataframe(
-                    res_df[['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req']]
-                    .rename(columns={
-                        'ticker': 'Ticker',
-                        'price': 'Price',
-                        'csp_strike': 'CSP Strike',
-                        'csp_premium': 'Premium',
-                        'csp_roc': 'Ann. ROC %',
-                        'capital_req': 'Cap Req'
-                    })
-                    .style.format({
-                        'Price': '${:.2f}', 
-                        'CSP Strike': '${:.2f}', 
-                        'Premium': '${:.2f}', 
-                        'Ann. ROC %': '{:.2f}%', 
-                        'Cap Req': '${:,.0f}'
-                    })
-                    .map(lambda v: 'color: green' if isinstance(v, (int, float)) and v > 15 else 'color: orange' if isinstance(v, (int, float)) and v > 10 else '', subset=['Ann. ROC %']),
-                    use_container_width=True
-                )
+                # --- Apply Screening Criteria ---
+                mask = pd.Series([True] * len(res_df), index=res_df.index)
+                if 'dte' in res_df.columns:
+                    mask &= (res_df['dte'] >= min_dte) & (res_df['dte'] <= max_dte)
+                if 'csp_premium' in res_df.columns:
+                    mask &= (res_df['csp_premium'] >= min_premium)
+                if 'csp_roc' in res_df.columns:
+                    mask &= (res_df['csp_roc'] >= min_csp_roc)
+                if 'blended_roc' in res_df.columns:
+                    mask &= (res_df['blended_roc'] >= min_blended_roc)
+                if 'capital_req' in res_df.columns:
+                    mask &= (res_df['capital_req'] <= max_cap_per_trade)
+                if 'iv' in res_df.columns:
+                    mask &= (res_df['iv'] >= min_iv)
                 
-                st.markdown("### 🛡️ Risk & Full-Loop Metrics")
-                st.dataframe(
-                    res_df[['ticker', 'cc_strike', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss']]
-                    .rename(columns={
-                        'ticker': 'Ticker',
-                        'cc_strike': 'CC Strike',
-                        'blended_roc': 'Blended ROC %',
-                        'defense_roll_strike': 'Roll Strike',
-                        'stop_loss_loss': 'Max Loss (Stop)'
-                    })
-                    .style.format({
-                        'CC Strike': '${:.2f}', 
-                        'Blended ROC %': '{:.2f}%', 
-                        'Roll Strike': '${:.2f}', 
-                        'Max Loss (Stop)': '${:,.0f}'
-                    }),
-                    use_container_width=True
-                )
+                filtered_df = res_df[mask].copy()
+                
+                # --- Sort ---
+                sort_map = {
+                    "CSP ROC %": ("csp_roc", True),
+                    "Blended ROC %": ("blended_roc", True),
+                    "DTE": ("dte", True),
+                    "Capital Req": ("capital_req", False),
+                    "Premium": ("csp_premium", True),
+                    "IV %": ("iv", True),
+                }
+                sort_col, ascending = sort_map.get(sort_by, ("csp_roc", True))
+                if sort_col in filtered_df.columns:
+                    filtered_df = filtered_df.sort_values(sort_col, ascending=ascending)
+                
+                filtered_count = len(filtered_df)
+                total_count = len(res_df)
+                
+                if filtered_count == 0:
+                    st.warning(f"No results match your criteria ({total_count} tickers scanned).")
+                else:
+                    st.markdown(f"### 📊 Screener Results — {filtered_count} / {total_count} matched")
+                    
+                    st.dataframe(
+                        filtered_df[['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv']]
+                        .rename(columns={
+                            'ticker': 'Ticker',
+                            'price': 'Price',
+                            'csp_strike': 'CSP Strike',
+                            'csp_premium': 'Premium',
+                            'csp_roc': 'CSP ROC %',
+                            'capital_req': 'Cap Req',
+                            'dte': 'DTE',
+                            'iv': 'IV %'
+                        })
+                        .style.format({
+                            'Price': '${:.2f}', 
+                            'CSP Strike': '${:.2f}', 
+                            'Premium': '${:.2f}', 
+                            'CSP ROC %': '{:.2f}%', 
+                            'Cap Req': '${:,.0f}',
+                            'IV %': '{:.1f}%'
+                        })
+                        .background_gradient(subset=['CSP ROC %'], cmap='YlGn'),
+                        use_container_width=True,
+                        height=400
+                    )
+                    
+                    st.markdown("### 🛡️ Risk & Full-Loop Metrics")
+                    st.dataframe(
+                        filtered_df[['ticker', 'cc_strike', 'cc_premium', 'blended_roc', 'defense_roll_strike', 'stop_loss_loss', 'capital_protected']]
+                        .rename(columns={
+                            'ticker': 'Ticker',
+                            'cc_strike': 'CC Strike',
+                            'cc_premium': 'CC Premium',
+                            'blended_roc': 'Blended ROC %',
+                            'defense_roll_strike': 'Roll Strike',
+                            'stop_loss_loss': 'Max Loss (Stop)',
+                            'capital_protected': 'Capital Protected %'
+                        })
+                        .style.format({
+                            'CC Strike': '${:.2f}', 
+                            'CC Premium': '${:.2f}',
+                            'Blended ROC %': '{:.2f}%', 
+                            'Roll Strike': '${:.2f}', 
+                            'Max Loss (Stop)': '${:,.0f}',
+                            'Capital Protected %': '{:.1f}%'
+                        }),
+                        use_container_width=True,
+                        height=400
+                    )
             else:
                 st.error("No data found for the provided tickers. Please check the symbols and try again.")
