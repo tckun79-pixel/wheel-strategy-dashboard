@@ -574,40 +574,105 @@ with tab4:
     
     # --- Screening Criteria ---
     with st.expander("⚙️ Screening Criteria", expanded=False):
+        # ── Profile presets ──────────────────────────────────────────────────────────
+        st.markdown("**Strategy Profile**")
+        profile_options = ["Custom", "Conservative", "Moderate", "Aggressive"]
+        # Initialize defaults on first run
+        if "screener_profile" not in st.session_state:
+            st.session_state["screener_profile"] = "Custom"
+            st.session_state["screener_max_cap"] = 30000.0
+            st.session_state["screener_min_dte"] = 7
+            st.session_state["screener_max_dte"] = 45
+            st.session_state["screener_min_premium"] = 0.30
+            st.session_state["screener_min_csp_roc"] = 0.0
+            st.session_state["screener_min_blended_roc"] = 0.0
+            st.session_state["screener_max_cap_per_trade"] = 30000.0
+            st.session_state["screener_min_iv"] = 0.0
+            st.session_state["screener_min_csp_delta_abs"] = 0.0
+            st.session_state["screener_max_csp_delta_abs"] = 1.0
+            st.session_state["screener_min_cc_delta"] = 0.0
+            st.session_state["screener_max_cc_delta"] = 1.0
+            st.session_state["screener_min_ivr"] = 0.0
+            st.session_state["screener_csp_target_delta"] = 0.18
+            st.session_state["screener_cc_target_delta"] = 0.25
+        
+        profiles = {
+            "Conservative": dict(
+                screener_max_cap=20000.0, screener_min_dte=14, screener_max_dte=30,
+                screener_min_premium=0.50, screener_min_csp_roc=0.0, screener_min_blended_roc=0.0,
+                screener_max_cap_per_trade=5000.0, screener_min_iv=30.0,
+                screener_min_csp_delta_abs=0.05, screener_max_csp_delta_abs=0.20,
+                screener_min_cc_delta=0.05, screener_max_cc_delta=0.20,
+                screener_min_ivr=80.0, screener_csp_target_delta=0.10, screener_cc_target_delta=0.15,
+            ),
+            "Moderate": dict(
+                screener_max_cap=30000.0, screener_min_dte=7, screener_max_dte=45,
+                screener_min_premium=0.30, screener_min_csp_roc=0.0, screener_min_blended_roc=0.0,
+                screener_max_cap_per_trade=10000.0, screener_min_iv=0.0,
+                screener_min_csp_delta_abs=0.0, screener_max_csp_delta_abs=1.0,
+                screener_min_cc_delta=0.0, screener_max_cc_delta=1.0,
+                screener_min_ivr=0.0, screener_csp_target_delta=0.18, screener_cc_target_delta=0.25,
+            ),
+            "Aggressive": dict(
+                screener_max_cap=50000.0, screener_min_dte=5, screener_max_dte=21,
+                screener_min_premium=0.10, screener_min_csp_roc=0.0, screener_min_blended_roc=0.0,
+                screener_max_cap_per_trade=20000.0, screener_min_iv=0.0,
+                screener_min_csp_delta_abs=0.20, screener_max_csp_delta_abs=0.50,
+                screener_min_cc_delta=0.20, screener_max_cc_delta=0.50,
+                screener_min_ivr=0.0, screener_csp_target_delta=0.30, screener_cc_target_delta=0.35,
+            ),
+        }
+        
+        def apply_profile():
+            p = st.session_state.screener_profile
+            if p == "Custom":
+                return  # keep current values
+            vals = profiles[p]
+            for k, v in vals.items():
+                st.session_state[k] = v
+        
+        st.selectbox(
+            "Profile", profile_options, index=profile_options.index(st.session_state["screener_profile"]),
+            key="screener_profile", on_change=apply_profile,
+            help="Select a profile to auto-fill criteria. Switch to Custom to override."
+        )
+        st.divider()
+        
+        # ── Criteria inputs (reference session_state) ─────────────────────────────────
         cr1, cr2, cr3 = st.columns(3)
-        min_dte = cr1.number_input("Min DTE", min_value=1, value=7, step=1, help="Minimum days to expiration")
-        max_dte = cr2.number_input("Max DTE", min_value=min_dte, value=45, step=1, help="Maximum days to expiration")
-        min_premium = cr3.number_input("Min Premium ($)", min_value=0.0, value=0.3, step=0.05, help="Minimum option premium per share")
+        min_dte = cr1.number_input("Min DTE", min_value=1, value=st.session_state["screener_min_dte"], step=1, help="Minimum days to expiration", key="screener_min_dte")
+        max_dte = cr2.number_input("Max DTE", min_value=min_dte, value=st.session_state["screener_max_dte"], step=1, help="Maximum days to expiration", key="screener_max_dte")
+        min_premium = cr3.number_input("Min Premium ($)", min_value=0.0, value=st.session_state["screener_min_premium"], step=0.05, help="Minimum option premium per share", key="screener_min_premium")
         
         cr4, cr5, cr6 = st.columns(3)
-        min_csp_roc = cr4.number_input("Min CSP ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized return for cash-secured put")
-        min_blended_roc = cr5.number_input("Min Blended ROC %", min_value=0.0, value=0.0, step=1.0, help="Minimum annualized blended return (full wheel loop)")
-        max_cap_per_trade = cr6.number_input("Max Capital per Trade ($)", min_value=0.0, value=30000.0, step=1000.0, help="Max capital requirement per single trade")
+        min_csp_roc = cr4.number_input("Min CSP ROC %", min_value=0.0, value=st.session_state["screener_min_csp_roc"], step=1.0, help="Minimum annualized return for cash-secured put", key="screener_min_csp_roc")
+        min_blended_roc = cr5.number_input("Min Blended ROC %", min_value=0.0, value=st.session_state["screener_min_blended_roc"], step=1.0, help="Minimum annualized blended return (full wheel loop)", key="screener_min_blended_roc")
+        max_cap_per_trade = cr6.number_input("Max Capital per Trade ($)", min_value=0.0, value=st.session_state["screener_max_cap_per_trade"], step=1000.0, help="Max capital requirement per single trade", key="screener_max_cap_per_trade")
         
         cr7, cr8 = st.columns(2)
-        min_iv = cr7.number_input("Min Implied Volatility (%)", min_value=0.0, value=0.0, step=5.0, help="Minimum IV% of the option")
+        min_iv = cr7.number_input("Min Implied Volatility (%)", min_value=0.0, value=st.session_state["screener_min_iv"], step=5.0, help="Minimum IV% of the option", key="screener_min_iv")
         sort_by = cr8.selectbox("Sort By", ["CSP ROC %", "Blended ROC %", "DTE", "Capital Req", "Premium", "IV %", "IVR %", "CSP Δ", "CC Δ"], index=0)
         
         # Delta range filters
         cr9, cr10 = st.columns(2)
         with cr9:
             st.markdown("**CSP Delta Range (abs)**")
-            min_csp_delta_abs = st.number_input("Min CSP Δ", min_value=0.0, value=0.0, step=0.05, help="Minimum absolute delta for CSP")
-            max_csp_delta_abs = st.number_input("Max CSP Δ", min_value=0.0, value=1.0, step=0.05, help="Maximum absolute delta for CSP")
+            min_csp_delta_abs = st.number_input("Min CSP Δ", min_value=0.0, value=st.session_state["screener_min_csp_delta_abs"], step=0.05, help="Minimum absolute delta for CSP", key="screener_min_csp_delta_abs")
+            max_csp_delta_abs = st.number_input("Max CSP Δ", min_value=0.0, value=st.session_state["screener_max_csp_delta_abs"], step=0.05, help="Maximum absolute delta for CSP", key="screener_max_csp_delta_abs")
         with cr10:
             st.markdown("**CC Delta Range**")
-            min_cc_delta = st.number_input("Min CC Δ", min_value=0.0, value=0.0, step=0.05, help="Minimum delta for CC")
-            max_cc_delta = st.number_input("Max CC Δ", min_value=0.0, value=1.0, step=0.05, help="Maximum delta for CC")
+            min_cc_delta = st.number_input("Min CC Δ", min_value=0.0, value=st.session_state["screener_min_cc_delta"], step=0.05, help="Minimum delta for CC", key="screener_min_cc_delta")
+            max_cc_delta = st.number_input("Max CC Δ", min_value=0.0, value=st.session_state["screener_max_cc_delta"], step=0.05, help="Maximum delta for CC", key="screener_max_cc_delta")
     
         # Min IVR filter
-        min_ivr = st.number_input("Min IVR %", min_value=0.0, value=0.0, step=1.0, help="Minimum implied volatility rank relative to 30‑day HV")
+        min_ivr = st.number_input("Min IVR %", min_value=0.0, value=st.session_state["screener_min_ivr"], step=1.0, help="Minimum implied volatility rank relative to 30‑day HV", key="screener_min_ivr")
         
         # Target deltas for strike selection
         cr12, cr13 = st.columns(2)
         with cr12:
-            csp_target_delta = st.number_input("CSP Target Δ", min_value=0.01, value=0.18, step=0.01, help="Desired absolute delta for CSP strike selection (e.g. 0.18 = deeper OTM)")
+            csp_target_delta = st.number_input("CSP Target Δ", min_value=0.01, value=st.session_state["screener_csp_target_delta"], step=0.01, help="Desired absolute delta for CSP strike selection (e.g. 0.18 = deeper OTM)", key="screener_csp_target_delta")
         with cr13:
-            cc_target_delta = st.number_input("CC Target Δ", min_value=0.01, value=0.25, step=0.01, help="Desired delta for CC strike selection (e.g. 0.25 = 25 delta)")
+            cc_target_delta = st.number_input("CC Target Δ", min_value=0.01, value=st.session_state["screener_cc_target_delta"], step=0.01, help="Desired delta for CC strike selection (e.g. 0.25 = 25 delta)", key="screener_cc_target_delta")
     
     if st.button("🚀 Run Analysis"):
         with st.spinner("Analyzing real-time options data..."):
