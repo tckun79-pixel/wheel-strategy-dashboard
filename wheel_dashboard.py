@@ -829,6 +829,13 @@ with tab4:
                     styler = display_df.style.format(format_dict)
                     if 'CSP ROC %' in display_df.columns:
                         styler = styler.background_gradient(subset=['CSP ROC %'], cmap='YlGn')
+                    if 'Profile' in display_df.columns:
+                        profile_colors = {
+                            'Conservative': 'background-color: #2e7d32; color: white; font-weight: bold',
+                            'Moderate':     'background-color: #e65100; color: white; font-weight: bold',
+                            'Aggressive':   'background-color: #b71c1c; color: white; font-weight: bold',
+                        }
+                        styler = styler.map(profile_colors, subset=['Profile'])
                     
                     st.dataframe(
                         styler,
