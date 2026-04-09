@@ -572,6 +572,20 @@ with tab4:
     ticker_list_input = col1.text_input("Enter Tickers (comma-separated)", value="NVDA, TSLA, AAPL, IREN, NBIS")
     max_cap_input = col2.number_input("Max Total Capital ($)", value=30000, step=5000)
     
+    # Per‑ticker profile overrides (format: "TICKER:Profile, TICKER:Profile")
+    ticker_profiles_input = st.text_input(
+        "Per‑Ticker Profile Overrides",
+        value="",
+        placeholder="e.g. NVDA:Conservative, TSLA:Aggressive",
+        help="Override the default profile for specific tickers. Format: TICKER:Profile (comma‑separated). Unlisted tickers use the Default Profile below."
+    )
+    default_profile = st.selectbox(
+        "Default Profile (unlisted tickers)",
+        ["Conservative", "Moderate", "Aggressive"],
+        index=1,
+        help="Applied to all tickers not listed in the Per‑Ticker Overrides above."
+    )
+    
     # --- Screening Criteria ---
     with st.expander("⚙️ Screening Criteria", expanded=False):
         # ── Profile presets ──────────────────────────────────────────────────────────
@@ -674,10 +688,58 @@ with tab4:
         with cr13:
             cc_target_delta = st.number_input("CC Target Δ", min_value=0.01, value=st.session_state["screener_cc_target_delta"], step=0.01, help="Desired delta for CC strike selection (e.g. 0.25 = 25 delta)", key="screener_cc_target_delta")
     
+    # Per‑profile delta targets (must match the profiles dict values above)
+    PROFILE_DELTA_TARGETS = {
+        "Conservative": {"csp_target_delta": 0.10, "cc_target_delta": 0.15},
+        "Moderate":     {"csp_target_delta": 0.18, "cc_target_delta": 0.25},
+        "Aggressive":   {"csp_target_delta": 0.30, "cc_target_delta": 0.35},
+    }
+    
+    def parse_ticker_profiles(raw: str, default: str) -> dict:
+        """Parse 'TICKER:Profile,TICKER:Profile' into {ticker: profile}."""
+        mapping = {}
+        if not raw:
+            return mapping
+        for entry in raw.split(","):
+            if ":" not in entry:
+                continue
+            key, val = entry.split(":", 1)
+            ticker = key.strip().upper()
+            profile = val.strip()
+            if profile in PROFILE_DELTA_TARGETS:
+                mapping[ticker] = profile
+            else:
+                st.warning(f"Unknown profile '{profile}' for {ticker} — using {default}.")
+                mapping[ticker] = default
+        return mapping
+    
     if st.button("🚀 Run Analysis"):
         with st.spinner("Analyzing real-time options data..."):
-            tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
-            analysis = analyze_strategy_optimized(tickers, float(max_cap_input), csp_target_delta=csp_target_delta, cc_target_delta=cc_target_delta)
+            all_tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
+            ticker_overrides = parse_ticker_profiles(ticker_profiles_input, default_profile)
+            
+            # Group tickers by profile
+            profile_groups = {}
+            for t in all_tickers:
+                p = ticker_overrides.get(t, default_profile)
+                profile_groups.setdefault(p, []).append(t)
+            
+            # Run analysis per profile group and merge results
+            all_results = []
+            for profile_name, tickers in profile_groups.items():
+                deltas = PROFILE_DELTA_TARGETS.get(profile_name, {"csp_target_delta": csp_target_delta, "cc_target_delta": cc_target_delta})
+                result = analyze_strategy_optimized(
+                    tickers, float(max_cap_input),
+                    csp_target_delta=deltas["csp_target_delta"],
+                    cc_target_delta=deltas["cc_target_delta"],
+                )
+                for r in result.get("results", []):
+                    r["profile"] = profile_name   # tag result with profile used
+                all_results.extend(result.get("results", []))
+            
+            total_capital = sum(r.get("capital_req", 0) for r in all_results)
+            max_exceeded = total_capital > float(max_cap_input)
+            analysis = {"results": all_results, "total_capital": total_capital, "max_exceeded": max_exceeded}
             
             if analysis["results"]:
                 if analysis["max_exceeded"]:
@@ -733,7 +795,7 @@ with tab4:
                     st.markdown(f"### 📊 Screener Results — {filtered_count} / {total_count} matched")
                     
                     # Dynamically select columns that exist to avoid KeyError
-                    primary_cols = ['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv', 'ivr', 'csp_delta_abs', 'cc_delta']
+                    primary_cols = ['ticker', 'price', 'csp_strike', 'csp_premium', 'csp_roc', 'capital_req', 'dte', 'iv', 'ivr', 'csp_delta_abs', 'cc_delta', 'profile']
                     available_primary = [c for c in primary_cols if c in filtered_df.columns]
                     
                     rename_map = {
@@ -747,7 +809,8 @@ with tab4:
                         'iv': 'IV %',
                         'ivr': 'IVR %',
                         'csp_delta_abs': 'CSP Δ',
-                        'cc_delta': 'CC Δ'
+                        'cc_delta': 'CC Δ',
+                        'profile': 'Profile'
                     }
                     format_dict = {
                         'Price': '${:.2f}', 
