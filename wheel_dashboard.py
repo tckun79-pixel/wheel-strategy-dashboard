@@ -7,7 +7,93 @@ from wheel_screener import analyze_strategy_optimized
 import uuid
 import json
 import re
+import time
+import logging
+import yaml
+from typing import Optional
 from supabase import create_client, Client
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+# --- Configuration Loading ---
+CONFIG_PATH = "config.yaml"
+CONFIG = {}
+try:
+    with open(CONFIG_PATH, 'r') as f:
+        CONFIG = yaml.safe_load(f)
+    logger.info("Configuration loaded from %s", CONFIG_PATH)
+except Exception as e:
+    logger.warning("Failed to load config.yaml: %s. Using defaults.", e)
+    CONFIG = {
+        "screener_defaults": {
+            "max_capital": 30000, "min_dte": 7, "max_dte": 45,
+            "min_premium": 0.30, "min_csp_roc": 0.0, "min_blended_roc": 0.0,
+            "max_cap_per_trade": 30000, "min_iv": 0.0, "min_ivr": 0.0,
+            "csp_target_delta": 0.18, "cc_target_delta": 0.25
+        },
+        "profiles": {
+            "Conservative": {
+                "max_capital": 20000, "min_dte": 14, "max_dte": 30,
+                "min_premium": 0.50, "max_cap_per_trade": 5000, "min_iv": 30,
+                "min_csp_delta_abs": 0.05, "max_csp_delta_abs": 0.20,
+                "min_cc_delta": 0.05, "max_cc_delta": 0.20, "min_ivr": 80,
+                "csp_target_delta": 0.10, "cc_target_delta": 0.15
+            },
+            "Moderate": {
+                "max_capital": 30000, "min_dte": 7, "max_dte": 45,
+                "min_premium": 0.30, "max_cap_per_trade": 10000, "min_iv": 0.0,
+                "min_csp_delta_abs": 0.0, "max_csp_delta_abs": 1.0,
+                "min_cc_delta": 0.0, "max_cc_delta": 1.0, "min_ivr": 0.0,
+                "csp_target_delta": 0.18, "cc_target_delta": 0.25
+            },
+            "Aggressive": {
+                "max_capital": 50000, "min_dte": 5, "max_dte": 21,
+                "min_premium": 0.10, "max_cap_per_trade": 20000, "min_iv": 0.0,
+                "min_csp_delta_abs": 0.20, "max_csp_delta_abs": 0.50,
+                "min_cc_delta": 0.20, "max_cc_delta": 0.50, "min_ivr": 0.0,
+                "csp_target_delta": 0.30, "cc_target_delta": 0.35
+            }
+        }
+    }
+
+# --- Input Validation Functions ---
+def validate_option_trade(ticker: str, strike: float, contracts: int, premium: float, expiry: date) -> tuple[bool, str]:
+    """Validate option trade inputs. Returns (valid, error_message)."""
+    if not ticker or not ticker.strip():
+        return False, "Ticker cannot be empty"
+    if strike <= 0:
+        return False, "Strike must be greater than 0"
+    if contracts < 1:
+        return False, "Contracts must be at least 1"
+    if expiry <= date.today():
+        return False, "Expiry must be after today"
+    if premium < 0:
+        return False, "Premium cannot be negative"
+    return True, ""
+
+def validate_stock_holding(shares: int, cost_price: float, acquisition_date: date) -> tuple[bool, str]:
+    """Validate stock holding inputs. Returns (valid, error_message)."""
+    if shares < 1:
+        return False, "Shares must be at least 1"
+    if cost_price < 0:
+        return False, "Cost price cannot be negative"
+    if acquisition_date > date.today():
+        return False, "Acquisition date cannot be in the future"
+    return True, ""
+
+def validate_screener_inputs(min_dte: int, max_dte: int, tickers: list) -> tuple[bool, str]:
+    """Validate screener inputs. Returns (valid, error_message)."""
+    if min_dte > max_dte:
+        return False, "Min DTE cannot be greater than Max DTE"
+    if not tickers:
+        return False, "Ticker list cannot be empty"
+    return True, ""
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Wheel Strategy Pro", layout="wide", page_icon="☸️")
@@ -42,7 +128,8 @@ def get_db():
         supabase_key = st.secrets.get("supabase_key", os.environ.get("SUPABASE_KEY", ""))
 
         if not supabase_key:
-            st.error("Internal Error: 'supabase_key' not found in secrets or SUPABASE_KEY env var.")
+            logger.error("'supabase_key' not found in secrets or SUPABASE_KEY env var")
+            st.error("Internal Error: Supabase key not configured. Please check your .streamlit/secrets.toml file.")
             return None
 
         db = create_client(supabase_url, supabase_key)
@@ -53,14 +140,16 @@ def get_db():
         except Exception as conn_err:
             err_str = str(conn_err).lower()
             if "jwt" in err_str or "unauthorized" in err_str or "apikey" in err_str:
-                st.error(f"Supabase auth error: {conn_err}")
+                logger.error("Supabase auth error: %s", conn_err)
+                st.error("Supabase authentication failed. Please check your API key.")
                 return None
-            # Table might not exist yet - continue anyway
+            logger.warning("Supabase connectivity check skipped: %s", conn_err)
 
         return db
 
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        logger.error("Connection Error: %s", e)
+        st.error("Connection Error: Unable to connect to database. Please check your configuration.")
         return None
 
 db = get_db()
@@ -86,13 +175,37 @@ def delete_document(collection_name, doc_id):
     if not db: return
     db.table(collection_name).delete().eq("id", doc_id).execute()
 
-# --- Market Data ---
+# --- Market Data (with retry & rate limiting) ---
+def get_current_price_with_retry(ticker: str) -> Optional[float]:
+    """Fetch current price with retry logic and fallback."""
+    ticker = ticker.strip().upper()
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            tk = yf.Ticker(ticker)
+            # Try fast_info first
+            price = tk.fast_info.last_price
+            if price is not None and price > 0:
+                logger.info("Price fetched for %s: $%.2f", ticker, price)
+                return float(price)
+            # Fallback to history
+            hist = tk.history(period="1d")
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                if price > 0:
+                    logger.info("Price fetched for %s via fallback: $%.2f", ticker, price)
+                    return float(price)
+            raise ValueError(f"Invalid price returned: {price}")
+        except Exception as e:
+            logger.warning("Attempt %d/%d failed for %s: %s", attempt + 1, max_attempts, ticker, e)
+            if attempt < max_attempts - 1:
+                time.sleep(1 * (attempt + 1))  # Exponential backoff
+    logger.error("All attempts failed for %s", ticker)
+    return None
+
 @st.cache_data(ttl=60)
 def get_current_price(ticker):
-    try:
-        return yf.Ticker(ticker).fast_info.last_price
-    except:
-        return None
+    return get_current_price_with_retry(ticker)
 
 # --- Main App ---
 st.title("☸️ Wheel Strategy Manager Pro")
@@ -116,6 +229,7 @@ if not st.session_state.authenticated:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
+                logger.warning("Failed login attempt with password: %s", "*" * len(admin_pass))
                 st.error("Incorrect Password")
 else:
     if st.sidebar.button("Logout"):
@@ -142,19 +256,24 @@ if check_auth():
             
             submitted = st.form_submit_button("Submit Option")
             if submitted and ticker_in:
-                new_trade = {
-                    'id': str(uuid.uuid4()),
-                    'Ticker': ticker_in,
-                    'Type': type_in,
-                    'Strike': strike_in,
-                    'Premium': premium_in,
-                    'Contracts': contracts_in,
-                    'Expiry': str(expiry_in), 
-                    'OpenDate': str(date.today())
-                }
-                add_document('positions', new_trade)
-                st.toast("Option Saved! ☁️")
-                st.rerun()
+                valid, err_msg = validate_option_trade(ticker_in, strike_in, contracts_in, premium_in, expiry_in)
+                if not valid:
+                    st.error(f"Validation: {err_msg}")
+                else:
+                    new_trade = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': ticker_in.strip().upper(),
+                        'Type': type_in,
+                        'Strike': strike_in,
+                        'Premium': premium_in,
+                        'Contracts': contracts_in,
+                        'Expiry': str(expiry_in), 
+                        'OpenDate': str(date.today())
+                    }
+                    add_document('positions', new_trade)
+                    logger.info("Option trade added: %s %s $%s", ticker_in, type_in, strike_in)
+                    st.toast("Option Saved! ☁️")
+                    st.rerun()
 
         else:
             st.subheader("Add Stock Inventory")
@@ -167,16 +286,21 @@ if check_auth():
             
             submitted = st.form_submit_button("Add Stock")
             if submitted and s_ticker:
-                new_holding = {
-                    'id': str(uuid.uuid4()),
-                    'Ticker': s_ticker,
-                    'Shares': s_shares,
-                    'CostPrice': s_cost,
-                    'Date': str(s_date)
-                }
-                add_document('holdings', new_holding)
-                st.toast("Stock Inventory Added! ☁️")
-                st.rerun()
+                valid, err_msg = validate_stock_holding(s_shares, s_cost, s_date)
+                if not valid:
+                    st.error(f"Validation: {err_msg}")
+                else:
+                    new_holding = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': s_ticker.strip().upper(),
+                        'Shares': s_shares,
+                        'CostPrice': s_cost,
+                        'Date': str(s_date)
+                    }
+                    add_document('holdings', new_holding)
+                    logger.info("Stock holding added: %s %d shares @ $%s", s_ticker, s_shares, s_cost)
+                    st.toast("Stock Inventory Added! ☁️")
+                    st.rerun()
 else:
     st.sidebar.info("Login to add new trades or stocks.")
 
@@ -197,7 +321,10 @@ with tab1:
         h_df = pd.DataFrame(holdings_data)
         with st.spinner('Syncing market data...'):
             unique_tickers = list(set(h_df['Ticker'].unique().tolist() + [p['Ticker'] for p in positions_data]))
-            prices = {t: get_current_price(t) for t in unique_tickers}
+            prices = {}
+            for t in unique_tickers:
+                prices[t] = get_current_price(t)
+                time.sleep(0.5)  # Rate limiting: 500ms between ticker fetches
             
         def calc_holding(row):
             curr = prices.get(row['Ticker'], 0) or 0
@@ -215,7 +342,10 @@ with tab1:
     else:
         with st.spinner('Syncing market data...'):
             unique_tickers = list(set([p['Ticker'] for p in positions_data]))
-            prices = {t: get_current_price(t) for t in unique_tickers}
+            prices = {}
+            for t in unique_tickers:
+                prices[t] = get_current_price(t)
+                time.sleep(0.5)  # Rate limiting: 500ms between ticker fetches
 
     df = pd.DataFrame()
     if positions_data:
@@ -268,6 +398,13 @@ with tab1:
             .map(color_pnl, subset=['Unrealized P&L']),
             use_container_width=True,
             height=150
+        )
+        st.download_button(
+            "📥 Export Stock Inventory CSV",
+            h_df[['Ticker', 'Shares', 'CostPrice', 'Current Price', 'Market Value', 'Unrealized P&L', 'Return %']].to_csv(index=False),
+            "stock_inventory.csv",
+            "text/csv",
+            key="dl_stock_inventory"
         )
         
         # --- Stock Actions ---
@@ -392,6 +529,13 @@ with tab1:
                 "Is ITM": st.column_config.CheckboxColumn("ITM", disabled=True),
                 "Status": st.column_config.TextColumn("Collateral Status", width="medium")
             }
+        )
+        st.download_button(
+            "📥 Export Active Positions CSV",
+            display_df[['Ticker', 'Type', 'Strike', 'Current Price', 'Dist to Strike', 'Annualized', 'DTE', 'Is ITM', 'Status']].to_csv(index=False),
+            "active_positions.csv",
+            "text/csv",
+            key="dl_active_positions"
         )
     else:
         st.info("No active options.")
@@ -552,6 +696,14 @@ with tab3:
     if history_data:
         h_df_view = pd.DataFrame(history_data)
         st.dataframe(h_df_view.sort_values('CloseDate', ascending=False), use_container_width=True)
+        
+        st.download_button(
+            "📥 Export Trade History CSV",
+            h_df_view.sort_values('CloseDate', ascending=False).to_csv(index=False),
+            "trade_history.csv",
+            "text/csv",
+            key="dl_trade_history"
+        )
         
         if check_auth():
             if st.button("Clear History"):
@@ -714,30 +866,34 @@ with tab4:
         return mapping
     
     if st.button("🚀 Run Analysis"):
-        with st.spinner("Analyzing real-time options data..."):
-            all_tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
-            ticker_overrides = parse_ticker_profiles(ticker_profiles_input, default_profile)
-            
-            # Group tickers by profile
-            profile_groups = {}
-            for t in all_tickers:
-                p = ticker_overrides.get(t, default_profile)
-                profile_groups.setdefault(p, []).append(t)
-            
-            # Run analysis per profile group and merge results
-            all_results = []
-            for profile_name, tickers in profile_groups.items():
-                deltas = PROFILE_DELTA_TARGETS.get(profile_name, {"csp_target_delta": csp_target_delta, "cc_target_delta": cc_target_delta})
-                result = analyze_strategy_optimized(
-                    tickers, float(max_cap_input),
-                    csp_target_delta=deltas["csp_target_delta"],
-                    cc_target_delta=deltas["cc_target_delta"],
-                )
-                for r in result.get("results", []):
-                    r["profile"] = profile_name   # tag result with profile used
-                all_results.extend(result.get("results", []))
-            
-            total_capital = sum(r.get("capital_req", 0) for r in all_results)
+        all_tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
+        valid, err_msg = validate_screener_inputs(min_dte, max_dte, all_tickers)
+        if not valid:
+            st.error(f"Validation: {err_msg}")
+        else:
+            with st.spinner("Analyzing real-time options data..."):
+                ticker_overrides = parse_ticker_profiles(ticker_profiles_input, default_profile)
+                
+                # Group tickers by profile
+                profile_groups = {}
+                for t in all_tickers:
+                    p = ticker_overrides.get(t, default_profile)
+                    profile_groups.setdefault(p, []).append(t)
+                
+                # Run analysis per profile group and merge results
+                all_results = []
+                for profile_name, tickers in profile_groups.items():
+                    deltas = PROFILE_DELTA_TARGETS.get(profile_name, {"csp_target_delta": csp_target_delta, "cc_target_delta": cc_target_delta})
+                    result = analyze_strategy_optimized(
+                        tickers, float(max_cap_input),
+                        csp_target_delta=deltas["csp_target_delta"],
+                        cc_target_delta=deltas["cc_target_delta"],
+                    )
+                    for r in result.get("results", []):
+                        r["profile"] = profile_name   # tag result with profile used
+                    all_results.extend(result.get("results", []))
+                
+                total_capital = sum(r.get("capital_req", 0) for r in all_results)
             max_exceeded = total_capital > float(max_cap_input)
             analysis = {"results": all_results, "total_capital": total_capital, "max_exceeded": max_exceeded}
             
@@ -841,6 +997,14 @@ with tab4:
                         styler,
                         use_container_width=True,
                         height=400
+                    )
+                    
+                    st.download_button(
+                        "📥 Export Screener Results CSV",
+                        filtered_df.to_csv(index=False),
+                        "screener_results.csv",
+                        "text/csv",
+                        key="dl_screener_results"
                     )
                     
                     st.markdown("### 🛡️ Risk & Full-Loop Metrics")

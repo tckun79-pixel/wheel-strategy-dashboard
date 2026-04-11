@@ -1,0 +1,60 @@
+supabase:
+  url: "https://xqatmutydxsxvrgnuwgm.supabase.co"
+  # key from secrets, not stored here
+
+screener_defaults:
+  max_capital: 30000
+  min_dte: 7
+  max_dte: 45
+  min_premium: 0.30
+  min_csp_roc: 0.0
+  min_blended_roc: 0.0
+  max_cap_per_trade: 30000
+  min_iv: 0.0
+  min_ivr: 0.0
+  csp_target_delta: 0.18
+  cc_target_delta: 0.25
+
+profiles:
+  Conservative:
+    max_capital: 20000
+    min_dte: 14
+    max_dte: 30
+    min_premium: 0.50
+    max_cap_per_trade: 5000
+    min_iv: 30
+    min_csp_delta_abs: 0.05
+    max_csp_delta_abs: 0.20
+    min_cc_delta: 0.05
+    max_cc_delta: 0.20
+    min_ivr: 80
+    csp_target_delta: 0.10
+    cc_target_delta: 0.15
+  Moderate:
+    max_capital: 30000
+    min_dte: 7
+    max_dte: 45
+    min_premium: 0.30
+    max_cap_per_trade: 10000
+    min_iv: 0.0
+    min_csp_delta_abs: 0.0
+    max_csp_delta_abs: 1.0
+    min_cc_delta: 0.0
+    max_cc_delta: 1.0
+    min_ivr: 0.0
+    csp_target_delta: 0.18
+    cc_target_delta: 0.25
+  Aggressive:
+    max_capital: 50000
+    min_dte: 5
+    max_dte: 21
+    min_premium: 0.10
+    max_cap_per_trade: 20000
+    min_iv: 0.0
+    min_csp_delta_abs: 0.20
+    max_csp_delta_abs: 0.50
+    min_cc_delta: 0.20
+    max_cc_delta: 0.50
+    min_ivr: 0.0
+    csp_target_delta: 0.30
+    cc_target_delta: 0.35
