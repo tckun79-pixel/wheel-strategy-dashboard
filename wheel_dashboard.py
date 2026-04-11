@@ -154,26 +154,49 @@ def get_db():
 
 db = get_db()
 
-# --- Database Helpers ---
-def load_collection(collection_name):
-    """Load all rows from a Supabase table, returns list of dicts."""
-    if not db: return []
-    result = db.table(collection_name).select("*").execute()
-    if not result.data:
-        return []
-    return result.data
+# --- Owner/Username for multi-user prep ---
+# Single-user mode: all records belong to 'admin'
+# Future: expand to per-user filtering
+DEFAULT_OWNER = "admin"
 
-def add_document(collection_name, data):
-    """Insert a document into a Supabase table."""
+def get_current_owner() -> str:
+    """Get the current owner's username. Returns DEFAULT_OWNER for single-user mode."""
+    return DEFAULT_OWNER
+
+# --- Database Helpers ---
+def load_collection(collection_name, owner: str = None):
+    """Load all rows from a Supabase table, filtered by owner. Returns list of dicts."""
+    if not db: return []
+    owner = owner or get_current_owner()
+    try:
+        result = db.table(collection_name).select("*").eq("owner", owner).execute()
+        if not result.data:
+            return []
+        return result.data
+    except Exception as e:
+        # Fallback: try without owner filter (for existing data without owner field)
+        logger.warning("Owner filter failed for %s, falling back: %s", collection_name, e)
+        result = db.table(collection_name).select("*").execute()
+        if not result.data:
+            return []
+        return result.data
+
+def add_document(collection_name, data, owner: str = None):
+    """Insert a document into a Supabase table with owner field."""
     if not db: return
+    owner = owner or get_current_owner()
     doc_id = data.get('id', str(uuid.uuid4()))
     data['id'] = doc_id
+    data['owner'] = owner
     db.table(collection_name).insert(data).execute()
+    logger.info("Added document to %s: id=%s, owner=%s", collection_name, doc_id, owner)
 
-def delete_document(collection_name, doc_id):
-    """Delete a document by id."""
+def delete_document(collection_name, doc_id, owner: str = None):
+    """Delete a document by id (filtered by owner for safety)."""
     if not db: return
-    db.table(collection_name).delete().eq("id", doc_id).execute()
+    owner = owner or get_current_owner()
+    db.table(collection_name).delete().eq("id", doc_id).eq("owner", owner).execute()
+    logger.info("Deleted document from %s: id=%s, owner=%s", collection_name, doc_id, owner)
 
 # --- Market Data (with retry & rate limiting) ---
 def get_current_price_with_retry(ticker: str) -> Optional[float]:
