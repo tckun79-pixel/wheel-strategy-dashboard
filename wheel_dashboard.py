@@ -1209,13 +1209,19 @@ with tab4:
                     styler = display_df.style.format(format_dict)
                     if 'CSP ROC %' in display_df.columns:
                         styler = styler.background_gradient(subset=['CSP ROC %'], cmap='YlGn')
+                    
+                    # Apply profile colors safely using apply (not map) to avoid pandas/streamlit styling bug
                     if 'Profile' in display_df.columns:
                         profile_colors = {
                             'Conservative': 'background-color: #2e7d32; color: white; font-weight: bold',
                             'Moderate':     'background-color: #e65100; color: white; font-weight: bold',
                             'Aggressive':   'background-color: #b71c1c; color: white; font-weight: bold',
                         }
-                        styler = styler.map(profile_colors, subset=['Profile'])
+                        def _profile_style(s):
+                            """Apply background color to Profile column values."""
+                            return [profile_colors.get(v, '') for v in s]
+                        
+                        styler = styler.apply(_profile_style, axis=0, subset=['Profile'])
                     
                     st.dataframe(
                         styler,
