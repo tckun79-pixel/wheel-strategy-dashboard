@@ -652,37 +652,156 @@ with tab2:
     if history_data:
         hist_df = pd.DataFrame(history_data)
         
+        # Ensure numeric columns
         hist_df['Profit'] = pd.to_numeric(hist_df['Profit'], errors='coerce').fillna(0)
+        hist_df['Premium'] = pd.to_numeric(hist_df.get('Premium', 0), errors='coerce').fillna(0)
+        hist_df['Contracts'] = pd.to_numeric(hist_df.get('Contracts', 0), errors='coerce').fillna(0)
+        hist_df['Strike'] = pd.to_numeric(hist_df.get('Strike', 0), errors='coerce').fillna(0)
+        hist_df['CostPrice'] = pd.to_numeric(hist_df.get('CostPrice', 0), errors='coerce').fillna(0)
+        hist_df['Shares'] = pd.to_numeric(hist_df.get('Shares', 0), errors='coerce').fillna(0)
         
-        summary = hist_df.groupby('Ticker').agg({
-            'Profit': ['sum', 'count'],
-            'Result': [
-                lambda x: (x == 'Expired').sum(),
-                lambda x: (x == 'Rolled').sum(),
-                lambda x: (x == 'Assigned').sum()
-            ]
-        }).reset_index()
+        # Parse DTE from expiry/opendate if available
+        def calc_dte(row):
+            try:
+                if 'Expiry' in row and row['Expiry'] and 'OpenDate' in row:
+                    exp = datetime.strptime(str(row['Expiry']), '%Y-%m-%d').date()
+                    open_d = datetime.strptime(str(row['OpenDate']), '%Y-%m-%d').date()
+                    return max(1, (exp - open_d).days)
+            except:
+                pass
+            return 30  # default
         
-        summary.columns = ['Ticker', 'Total Realized P&L', 'Trade Count', 'Expired', 'Rolled', 'Assigned']
+        hist_df['DTE'] = hist_df.apply(calc_dte, axis=1)
+        
+        # Calculate capital deployed per trade
+        def calc_capital(row):
+            if row.get('Type') == 'Stock' or row.get('Result') == 'Sold':
+                return float(row.get('CostPrice', 0)) * float(row.get('Shares', 0))
+            else:  # Options (CSP/CC)
+                return float(row.get('Strike', 0)) * 100 * int(row.get('Contracts', 1))
+        
+        hist_df['Capital'] = hist_df.apply(calc_capital, axis=1)
+        
+        # Build comprehensive summary per ticker
+        def build_summary(grp):
+            total_trades = len(grp)
+            expired = (grp['Result'] == 'Expired').sum()
+            rolled = (grp['Result'] == 'Rolled').sum()
+            assigned = (grp['Result'] == 'Assigned').sum()
+            closed_early = (grp['Result'] == 'Closed Early').sum()
+            
+            total_profit = grp['Profit'].sum()
+            winning_trades = (grp['Profit'] > 0).sum()
+            win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            assignment_rate = (assigned / total_trades * 100) if total_trades > 0 else 0
+            
+            avg_dte = grp['DTE'].mean() if 'DTE' in grp else 30
+            avg_profit = (total_profit / total_trades) if total_trades > 0 else 0
+            total_capital = grp['Capital'].sum()
+            
+            # Avg ROC % (using premium/capital ratio annualized)
+            avg_premium = grp['Premium'].mean()
+            avg_capital = grp['Capital'].mean() if total_trades > 0 else 1
+            avg_roc = (avg_premium / avg_capital * 365 / avg_dte * 100) if avg_capital > 0 else 0
+            
+            # Max loss scenario: worst case if all CSPs assigned at low price, all CCs called away
+            csp_trades = grp[grp['Type'] == 'Put']
+            cc_trades = grp[grp['Type'] == 'Call']
+            
+            max_loss = 0
+            if not csp_trades.empty:
+                # If assigned, loss = (strike - stock_price) * 100 * contracts (estimated at 10% below strike)
+                csp_loss = csp_trades.apply(
+                    lambda r: r['Strike'] * 0.10 * 100 * r['Contracts'], axis=1
+                ).sum()
+                max_loss += csp_loss
+            if not cc_trades.empty:
+                # If called away, opportunity cost = (current_price - strike) * 100 * shares
+                cc_loss = cc_trades.apply(
+                    lambda r: r['Strike'] * 0.05 * 100 * r['Contracts'], axis=1
+                ).sum()
+                max_loss += cc_loss
+            
+            return pd.Series({
+                'Total Realized P&L': total_profit,
+                'Trade Count': total_trades,
+                'Expired': expired,
+                'Rolled': rolled,
+                'Assigned': assigned,
+                'Closed Early': closed_early,
+                'Win Rate %': win_rate,
+                'Assignment Rate %': assignment_rate,
+                'Avg DTE': avg_dte,
+                'Avg Profit/Trade': avg_profit,
+                'Avg ROC %': avg_roc,
+                'Total Capital Deployed': total_capital,
+                'Max Loss Scenario': max_loss
+            })
+        
+        summary = hist_df.groupby('Ticker').apply(build_summary).reset_index()
         summary = summary.sort_values('Total Realized P&L', ascending=False)
         
+        # Overall metrics
         total_p_l = summary['Total Realized P&L'].sum()
+        total_trades = summary['Trade Count'].sum()
+        total_capital = summary['Total Capital Deployed'].sum()
+        overall_win_rate = (summary['Expired'].sum() / total_trades * 100) if total_trades > 0 else 0
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Realized P&L", f"${total_p_l:,.2f}")
-        c2.metric("Winning Trades", f"{summary['Expired'].sum()}")
-        c3.metric("Total Trades", f"{summary['Trade Count'].sum()}")
+        c2.metric("Win Rate", f"{overall_win_rate:.1f}%")
+        c3.metric("Total Trades", f"{total_trades}")
         
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Total Capital Deployed", f"${total_capital:,.2f}")
+        c5.metric("Max Loss Scenario", f"${summary['Max Loss Scenario'].sum():,.2f}", delta_color="inverse")
+        c6.metric("Avg ROC %", f"{summary['Avg ROC %'].mean():.2f}%")
+        
+        st.divider()
         st.markdown("### 🏷️ Performance by Ticker")
+        
         def color_pl(val):
             try:
                 num = float(val)
                 return 'color: green' if num > 0 else 'color: red' if num < 0 else ''
             except (ValueError, TypeError):
                 return ''
-
+        
+        def color_win_rate(val):
+            try:
+                num = float(val)
+                return 'color: green' if num >= 70 else 'color: orange' if num >= 50 else 'color: red'
+            except (ValueError, TypeError):
+                return ''
+        
+        display_cols = ['Ticker', 'Total Realized P&L', 'Trade Count', 'Win Rate %', 
+                        'Assignment Rate %', 'Avg DTE', 'Avg Profit/Trade', 'Avg ROC %', 
+                        'Total Capital Deployed', 'Max Loss Scenario']
+        available_cols = [c for c in display_cols if c in summary.columns]
+        
         st.dataframe(
-            summary.style.format({'Total Realized P&L': '${:,.2f}'})
-            .map(color_pl, subset=['Total Realized P&L']),
+            summary[available_cols]
+            .style.format({
+                'Total Realized P&L': '${:,.2f}',
+                'Win Rate %': '{:.1f}%',
+                'Assignment Rate %': '{:.1f}%',
+                'Avg DTE': '{:.0f}',
+                'Avg Profit/Trade': '${:,.2f}',
+                'Avg ROC %': '{:.2f}%',
+                'Total Capital Deployed': '${:,.0f}',
+                'Max Loss Scenario': '${:,.0f}'
+            })
+            .map(color_pl, subset=['Total Realized P&L', 'Avg Profit/Trade', 'Max Loss Scenario'])
+            .map(color_win_rate, subset=['Win Rate %']),
+            use_container_width=True
+        )
+        
+        # Show results breakdown
+        st.markdown("### 📋 Result Breakdown")
+        result_cols = ['Ticker', 'Expired', 'Rolled', 'Assigned', 'Closed Early']
+        available_result_cols = [c for c in result_cols if c in summary.columns]
+        st.dataframe(
+            summary[available_result_cols],
             use_container_width=True
         )
     else:
