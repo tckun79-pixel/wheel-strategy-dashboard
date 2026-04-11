@@ -984,6 +984,88 @@ with tab4:
                 mapping[ticker] = default
         return mapping
     
+    # --- Screener Presets ---
+    st.markdown("### 💾 Screener Presets")
+    preset_col1, preset_col2, preset_col3 = st.columns([2, 1, 1])
+    
+    # Load presets from Supabase
+    try:
+        presets_data = load_collection('screener_presets')
+    except Exception as e:
+        logger.warning("Could not load screener presets: %s", e)
+        presets_data = []
+    
+    preset_names = ["(Select a preset)"] + [p.get('name', 'Unnamed') for p in presets_data]
+    selected_preset = preset_col1.selectbox("Load Preset", preset_names, key="screener_preset_select")
+    
+    # Load selected preset
+    if selected_preset != "(Select a preset)" and check_auth():
+        preset = next((p for p in presets_data if p.get('name') == selected_preset), None)
+        if preset:
+            criteria = preset.get('criteria_json', {})
+            if isinstance(criteria, dict):
+                for key, value in criteria.items():
+                    if key in st.session_state:
+                        st.session_state[key] = value
+                st.success(f"Loaded preset: {selected_preset}")
+                logger.info("Loaded screener preset: %s", selected_preset)
+                st.rerun()
+    
+    # Save preset
+    if preset_col2.button("💾 Save Preset") and check_auth():
+        st.session_state['show_preset_name_input'] = True
+    
+    preset_name_input = None
+    if st.session_state.get('show_preset_name_input', False):
+        preset_name_input = preset_col1.text_input("Preset Name", key="preset_name_input")
+        save_col1, save_col2 = st.columns(2)
+        if save_col1.button("Confirm Save"):
+            if preset_name_input and preset_name_input.strip():
+                criteria = {
+                    'screener_min_dte': st.session_state.get('screener_min_dte', 7),
+                    'screener_max_dte': st.session_state.get('screener_max_dte', 45),
+                    'screener_min_premium': st.session_state.get('screener_min_premium', 0.30),
+                    'screener_min_csp_roc': st.session_state.get('screener_min_csp_roc', 0.0),
+                    'screener_min_blended_roc': st.session_state.get('screener_min_blended_roc', 0.0),
+                    'screener_max_cap_per_trade': st.session_state.get('screener_max_cap_per_trade', 30000.0),
+                    'screener_min_iv': st.session_state.get('screener_min_iv', 0.0),
+                    'screener_min_csp_delta_abs': st.session_state.get('screener_min_csp_delta_abs', 0.0),
+                    'screener_max_csp_delta_abs': st.session_state.get('screener_max_csp_delta_abs', 1.0),
+                    'screener_min_cc_delta': st.session_state.get('screener_min_cc_delta', 0.0),
+                    'screener_max_cc_delta': st.session_state.get('screener_max_cc_delta', 1.0),
+                    'screener_min_ivr': st.session_state.get('screener_min_ivr', 0.0),
+                    'screener_csp_target_delta': st.session_state.get('screener_csp_target_delta', 0.18),
+                    'screener_cc_target_delta': st.session_state.get('screener_cc_target_delta', 0.25),
+                }
+                new_preset = {
+                    'name': preset_name_input.strip(),
+                    'criteria_json': json.dumps(criteria),
+                    'created_at': str(datetime.now())
+                }
+                add_document('screener_presets', new_preset)
+                logger.info("Saved screener preset: %s", preset_name_input.strip())
+                st.success(f"Preset '{preset_name_input}' saved!")
+                st.session_state['show_preset_name_input'] = False
+                st.rerun()
+        if save_col2.button("Cancel"):
+            st.session_state['show_preset_name_input'] = False
+            st.rerun()
+    
+    # Delete preset (admin only)
+    if presets_data and check_auth():
+        with st.expander("🗑️ Manage Presets"):
+            for p in presets_data:
+                p_name = p.get('name', 'Unnamed')
+                p_id = p.get('id', '')
+                del_col1, del_col2 = st.columns([4, 1])
+                del_col1.write(f"📁 {p_name}")
+                if del_col2.button("Delete", key=f"del_preset_{p_id}"):
+                    delete_document('screener_presets', p_id)
+                    logger.info("Deleted screener preset: %s", p_name)
+                    st.rerun()
+    
+    st.divider()
+    
     if st.button("🚀 Run Analysis"):
         all_tickers = [t.strip().upper() for t in ticker_list_input.split(",") if t.strip()]
         valid, err_msg = validate_screener_inputs(min_dte, max_dte, all_tickers)
