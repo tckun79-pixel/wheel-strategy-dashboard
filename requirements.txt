@@ -4,3 +4,5 @@ pandas
 supabase
 pyyaml
 matplotlib
+mibian
+scipy

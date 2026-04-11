@@ -305,7 +305,7 @@ else:
     st.sidebar.info("Login to add new trades or stocks.")
 
 # --- Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🔍 Screener"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 Active Positions", "📉 Campaign Analysis", "📜 Trade History", "🔍 Screener", "📊 Option Calculator"])
 
 # ==========================
 # TAB 1: ACTIVE POSITIONS
@@ -1243,3 +1243,137 @@ with tab4:
                         st.warning("No risk metrics available.")
             else:
                 st.error("No data found for the provided tickers. Please check the symbols and try again.")
+# ==========================
+# TAB 5: OPTION CALCULATOR (Black-Scholes)
+# ==========================
+with tab5:
+    st.subheader("📊 Black-Scholes Option Calculator")
+    st.write("Calculate theoretical option prices and Greeks using the Black-Scholes model.")
+    
+    # Try to import mibian for Black-Scholes calculations
+    try:
+        import mibian as mb
+        MB_AVAILABLE = True
+    except ImportError:
+        MB_AVAILABLE = False
+        st.warning("⚠️ `mibian` library not installed. Option pricing unavailable. Run: `pip install mibian`")
+    
+    calc_col1, calc_col2 = st.columns(2)
+    
+    ticker_calc = calc_col1.text_input("Ticker Symbol", value="AAPL", key="calc_ticker").upper()
+    option_type = calc_col2.selectbox("Option Type", ["Put", "Call"], key="calc_type")
+    
+    # Fetch current price
+    if ticker_calc:
+        with st.spinner(f"Fetching price for {ticker_calc}..."):
+            current_price = get_current_price(ticker_calc)
+        if current_price:
+            st.success(f"Current price: ${current_price:.2f}")
+        else:
+            st.warning("Could not fetch current price. Enter manually below.")
+            current_price = None
+    else:
+        current_price = None
+    
+    price_input = st.number_input("Underlying Price ($)", value=float(current_price) if current_price else 100.0, min_value=0.01, step=0.5, key="calc_price")
+    strike_input = st.number_input("Strike Price ($)", value=float(current_price) if current_price else 100.0, min_value=0.01, step=0.5, key="calc_strike")
+    expiry_input = st.date_input("Expiration Date", value=date.today() + timedelta(days=30), key="calc_expiry")
+    interest_rate = st.number_input("Risk-Free Interest Rate (%)", value=5.0, min_value=0.0, max_value=50.0, step=0.1, key="calc_rate") / 100
+    volatility_input = st.number_input("Implied Volatility (%)", value=30.0, min_value=1.0, max_value=200.0, step=1.0, key="calc_iv") / 100
+    
+    # Calculate DTE
+    try:
+        dte = max(1, (expiry_input - date.today()).days)
+    except:
+        dte = 30
+    
+    st.markdown(f"**Days to Expiration: {dte} days**")
+    
+    if st.button("📈 Calculate", key="calc_button"):
+        if not MB_AVAILABLE:
+            st.error("Mibian library is required for calculations. Please install it first.")
+        else:
+            try:
+                # Black-Scholes calculation using mibian
+                # mibian.BS([underlying, strike, interest, days_to_expiry], volatility=iv*100)
+                c = mb.BS([price_input, strike_input, interest_rate * 100, dte], volatility=volatility_input * 100)
+                
+                if option_type == "Call":
+                    option_price = c.callPrice
+                    delta = c.callDelta
+                    gamma = c.callGamma
+                    theta = c.callTheta
+                    rho = c.callRho
+                else:
+                    option_price = c.putPrice
+                    delta = c.putDelta
+                    gamma = c.putGamma
+                    theta = c.putTheta
+                    rho = c.putRho
+                
+                vega = c.vega
+                
+                # Display results
+                st.markdown("### 📊 Calculation Results")
+                
+                res1, res2, res3, res4 = st.columns(4)
+                res1.metric("Option Price", f"${option_price:.2f}")
+                res2.metric("Delta", f"{delta:.4f}")
+                res3.metric("Gamma", f"{gamma:.4f}")
+                res4.metric("Theta", f"${theta:.4f}/day")
+                
+                res5, res6 = st.columns(2)
+                res5.metric("Vega", f"${vega:.4f}/vol")
+                res6.metric("Rho", f"${rho:.4f}")
+                
+                # Display as table
+                st.markdown("### 📋 Greeks Summary")
+                greeks_data = {
+                    "Greek": ["Delta", "Gamma", "Theta", "Vega", "Rho", "Price"],
+                    "Value": [f"{delta:.6f}", f"{gamma:.6f}", f"{theta:.6f}", f"{vega:.6f}", f"{rho:.6f}", f"${option_price:.2f}"],
+                    "Interpretation": [
+                        f"${delta:.2f} per $1 move in underlying",
+                        f"{gamma:.4f} delta change per $1 move",
+                        f"${theta:.2f} value lost per day",
+                        f"${vega:.2f} per 1% IV change",
+                        f"${rho:.2f} per 1% interest rate change",
+                        "Theoretical option price"
+                    ]
+                }
+                st.dataframe(pd.DataFrame(greeks_data), use_container_width=True)
+                
+                # Probability analysis
+                st.markdown("### 🎯 Probability Analysis")
+                from scipy.stats import norm
+                
+                d1 = (math.log(price_input / strike_input) + (interest_rate + 0.5 * volatility_input ** 2) * dte / 365) / (volatility_input * math.sqrt(dte / 365))
+                d2 = d1 - volatility_input * math.sqrt(dte / 365)
+                
+                if option_type == "Call":
+                    prob_itm = 1 - norm.cdf(-d2)  # P(S > K) for call
+                    prob_otm = norm.cdf(-d2)       # P(S < K) for call
+                else:
+                    prob_itm = norm.cdf(-d2)        # P(S < K) for put
+                    prob_otm = 1 - norm.cdf(-d2)    # P(S > K) for put
+                
+                p1, p2 = st.columns(2)
+                p1.metric(f"Probability ITM ({option_type})", f"{prob_itm * 100:.1f}%")
+                p2.metric("Probability OTM", f"{prob_otm * 100:.1f}%")
+                
+                logger.info("Black-Scholes calculated for %s %s: price=%.2f, delta=%.4f", ticker_calc, option_type, option_price, delta)
+                
+            except Exception as e:
+                logger.error("Black-Scholes calculation error: %s", e)
+                st.error(f"Calculation error: {e}")
+    
+    # Manual Greeks info
+    st.markdown("### 📚 Greeks Explained")
+    st.markdown("""
+    | Greek | Meaning | Typical Values |
+    |-------|---------|----------------|
+    | **Delta (Δ)** | Price sensitivity to underlying | Call: 0 to 1, Put: -1 to 0 |
+    | **Gamma (Γ)** | Delta's rate of change | Highest near ATM |
+    | **Theta (Θ)** | Time decay per day | Usually negative (decaying) |
+    | **Vega (ν)** | Sensitivity to IV changes | Positive for long options |
+    | **Rho (ρ)** | Sensitivity to interest rate | Small effect typically |
+    """)
