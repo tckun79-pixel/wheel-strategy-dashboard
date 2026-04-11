@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Union
 import streamlit as st
+import traceback
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -33,55 +34,75 @@ def get_real_market_data(ticker: str, csp_target_delta: float = None, cc_target_
             return None
             
         # Get options expiration dates
-        expirations = tk.options
+        expirations = list(tk.options)
         if not expirations:
-            print(f"No options expirations for {ticker}")
+            print(f"[{ticker}] No options expirations available")
             return None
-            
-        # Target ~45 DTE
-        target_date = datetime.now() + timedelta(days=45)
-        try:
-            best_exp = min(expirations, key=lambda x: abs(datetime.strptime(x, '%Y-%m-%d') - target_date))
-        except Exception as e:
-            print(f"Error selecting expiry for {ticker}: {e}")
-            return None
-            
-        opt_chain = tk.option_chain(best_exp)
-        puts = opt_chain.puts
-        calls = opt_chain.calls
-        
-        if puts.empty or calls.empty:
-            print(f"Empty option chain for {ticker} on {best_exp}: puts={len(puts)}, calls={len(calls)}")
-            return None
-        
-        # Quantitative Delta Parameters
-        is_high_priced = price >= 100
-        csp_delta_target_val = csp_target_delta if csp_target_delta is not None else (0.18 if is_high_priced else 0.30)
-        cc_delta_target_val = cc_target_delta if cc_target_delta is not None else 0.25
-        
-        # Find best CSP strike (closest to target delta)
-        if 'delta' in puts.columns and not puts.empty:
-            puts['delta_diff'] = abs(puts['delta'].abs() - csp_delta_target_val)
-            best_put = puts.loc[puts['delta_diff'].idxmin()]
-        else:
-            # Fallback: use 5% OTM put
-            target_strike = price * 0.95
-            puts['strike_diff'] = abs(puts['strike'] - target_strike)
-            best_put = puts.loc[puts['strike_diff'].idxmin()]
 
-        # Find best CC strike (closest to target delta)
-        if 'delta' in calls.columns and not calls.empty:
-            calls['delta_diff'] = abs(calls['delta'].abs() - cc_delta_target_val)
-            best_call = calls.loc[calls['delta_diff'].idxmin()]
-        else:
-            # Fallback: use 10% ITM call
-            target_strike = price * 1.10
-            calls['strike_diff'] = abs(calls['strike'] - target_strike)
-            best_call = calls.loc[calls['strike_diff'].idxmin()]
+        # Target ~45 DTE, try up to 3 closest expirations until we get valid chain
+        target_date = datetime.now() + timedelta(days=45)
+        sorted_expirations = sorted(expirations, key=lambda x: abs(datetime.strptime(x, '%Y-%m-%d') - target_date))
         
-        # Calculate DTE
+        best_put = None
+        best_call = None
+        chosen_exp = None
+        
+        for exp in sorted_expirations[:3]:  # Try up to 3 closest expirations
+            try:
+                opt_chain = tk.option_chain(exp)
+                puts = opt_chain.puts
+                calls = opt_chain.calls
+                
+                if puts.empty or calls.empty:
+                    print(f"[{ticker}] Empty chain for {exp} (puts={len(puts)}, calls={len(calls)}), trying next expiry...")
+                    continue
+                    
+                # We have data! Pick strikes.
+                chosen_exp = exp
+                
+                # Quantitative Delta Parameters
+                is_high_priced = price >= 100
+                csp_delta_target_val = csp_target_delta if csp_target_delta is not None else (0.18 if is_high_priced else 0.30)
+                cc_delta_target_val = cc_target_delta if cc_target_delta is not None else 0.25
+                
+                # Find best CSP strike
+                if 'delta' in puts.columns and not puts.empty:
+                    puts_copy = puts.copy()
+                    puts_copy['delta_diff'] = abs(puts_copy['delta'].abs() - csp_delta_target_val)
+                    best_put = puts_copy.loc[puts_copy['delta_diff'].idxmin()]
+                else:
+                    # Fallback: 5% OTM put
+                    target_strike = price * 0.95
+                    puts_copy = puts.copy()
+                    puts_copy['strike_diff'] = abs(puts_copy['strike'] - target_strike)
+                    best_put = puts_copy.loc[puts_copy['strike_diff'].idxmin()]
+                
+                # Find best CC strike
+                if 'delta' in calls.columns and not calls.empty:
+                    calls_copy = calls.copy()
+                    calls_copy['delta_diff'] = abs(calls_copy['delta'].abs() - cc_delta_target_val)
+                    best_call = calls_copy.loc[calls_copy['delta_diff'].idxmin()]
+                else:
+                    # Fallback: 10% ITM call
+                    target_strike = price * 1.10
+                    calls_copy = calls.copy()
+                    calls_copy['strike_diff'] = abs(calls_copy['strike'] - target_strike)
+                    best_call = calls_copy.loc[calls_copy['strike_diff'].idxmin()]
+                
+                # Success — break out of loop
+                break
+                
+            except Exception as e:
+                print(f"[{ticker}] Error processing expiry {exp}: {e}")
+                continue
+        
+        if best_put is None or best_call is None:
+            print(f"[{ticker}] Could not find valid strikes across top 3 expirations")
+            return None
+        
+        # Calculate DTE from chosen expiry
         try:
-            dte = max(1, (datetime.strptime(best_exp, '%Y-%m-%d') - datetime.now()).days)
+            dte = max(1, (datetime.strptime(chosen_exp, '%Y-%m-%d') - datetime.now()).days)
         except Exception:
             dte = 30
         
