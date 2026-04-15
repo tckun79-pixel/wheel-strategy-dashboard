@@ -680,7 +680,9 @@ with tab2:
         hist_df['Premium'] = pd.to_numeric(hist_df.get('Premium', 0), errors='coerce').fillna(0)
         hist_df['Contracts'] = pd.to_numeric(hist_df.get('Contracts', 0), errors='coerce').fillna(0)
         hist_df['Strike'] = pd.to_numeric(hist_df.get('Strike', 0), errors='coerce').fillna(0)
-        hist_df['CostPrice'] = pd.to_numeric(hist_df.get('CostPrice', 0), errors='coerce').fillna(0)
+        hist_df['CostPrice'] = pd.to_numeric(
+          hist_df['CostPrice'] if 'CostPrice' in hist_df.columns else         pd.Series(0.0, index=hist_df.index),
+           errors='coerce').fillna(0) 
         hist_df['Shares'] = pd.to_numeric(hist_df.get('Shares', 0), errors='coerce').fillna(0)
         
         # Parse DTE from expiry/opendate if available
