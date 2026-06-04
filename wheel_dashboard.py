@@ -448,6 +448,13 @@ with tab1:
                      (row['Type'] == 'Call' and curr > row['Strike'])
             if is_itm: option_risk_count += 1
 
+    # Add bull put spread premium to unrealized premium held
+    open_spread_premium = sum(
+        float(s['NetCredit']) * int(s['Contracts']) * 100
+        for s in spreads_data if s.get('Status') == 'Open'
+    )
+    total_option_premium += open_spread_premium
+
     m1, m2, m3, m4 = st.columns(4)
     
     m1.metric(
