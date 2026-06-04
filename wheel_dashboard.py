@@ -95,6 +95,23 @@ def validate_screener_inputs(min_dte: int, max_dte: int, tickers: list) -> tuple
         return False, "Ticker list cannot be empty"
     return True, ""
 
+
+def validate_bull_put_spread(ticker: str, short_strike: float, long_strike: float, contracts: int, net_credit: float, expiry: date) -> tuple[bool, str]:
+    """Validate bull put spread inputs. Returns (valid, error_message)."""
+    if not ticker or not ticker.strip():
+        return False, "Ticker cannot be empty"
+    if short_strike <= 0 or long_strike <= 0:
+        return False, "Strikes must be greater than 0"
+    if long_strike >= short_strike:
+        return False, "Long put strike must be below short put strike"
+    if contracts < 1:
+        return False, "Contracts must be at least 1"
+    if net_credit < 0:
+        return False, "Net credit cannot be negative"
+    if expiry <= date.today():
+        return False, "Expiry must be after today"
+    return True, ""
+
 # --- Page Configuration ---
 st.set_page_config(page_title="Wheel Strategy Pro", layout="wide", page_icon="☸️")
 
@@ -238,6 +255,11 @@ if not db:
 
 # --- Global Data Load ---
 positions_data = load_collection('positions')
+try:
+    spreads_data = load_collection('spreads')
+except Exception:
+    spreads_data = []
+    logger.warning("Spreads table not yet created; run supabase_setup.sql first.")
 history_data = load_collection('history')
 holdings_data = load_collection('holdings')
 
@@ -264,7 +286,7 @@ st.sidebar.divider()
 st.sidebar.header("➕ Portfolio Actions")
 
 if check_auth():
-    add_mode = st.sidebar.radio("Entry Type", ["Option Trade", "Stock Holding (Assignment)"], horizontal=True)
+    add_mode = st.sidebar.radio("Entry Type", ["Option Trade", "Bull Put Spread", "Stock Holding (Assignment)"], horizontal=True)
 
     with st.sidebar.form("add_entry_form", clear_on_submit=True):
         if add_mode == "Option Trade":
@@ -296,6 +318,47 @@ if check_auth():
                     add_document('positions', new_trade)
                     logger.info("Option trade added: %s %s $%s", ticker_in, type_in, strike_in)
                     st.toast("Option Saved! ☁️")
+                    st.rerun()
+
+        elif add_mode == "Bull Put Spread":
+            st.subheader("Add Bull Put Spread")
+            col1, col2 = st.columns(2)
+            bps_ticker = col1.text_input("Ticker").upper()
+            bps_expiry = st.date_input("Expiry Date")
+            bps_short_strike = col1.number_input("Short Put Strike (Sold)", min_value=0.0, step=0.5, help="Higher strike — the put you sell")
+            bps_long_strike = col2.number_input("Long Put Strike (Bought)", min_value=0.0, step=0.5, help="Lower strike — the put you buy")
+            bps_net_credit = st.number_input("Net Credit Received (Per Share)", min_value=0.0, step=0.01)
+            bps_contracts = st.number_input("Contracts", min_value=1, step=1)
+            bps_notes = st.text_area("Notes (optional)", placeholder="e.g. opened during IV spike")
+
+            bps_submitted = st.form_submit_button("Submit Spread")
+            if bps_submitted and bps_ticker:
+                valid, err_msg = validate_bull_put_spread(
+                    bps_ticker, bps_short_strike, bps_long_strike,
+                    bps_contracts, bps_net_credit, bps_expiry
+                )
+                if not valid:
+                    st.error(f"Validation: {err_msg}")
+                else:
+                    spread_width = bps_short_strike - bps_long_strike
+                    new_spread = {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': bps_ticker.strip().upper(),
+                        'Expiry': str(bps_expiry),
+                        'ShortPutStrike': bps_short_strike,
+                        'LongPutStrike': bps_long_strike,
+                        'NetCredit': bps_net_credit,
+                        'Contracts': bps_contracts,
+                        'OpenDate': str(date.today()),
+                        'Status': 'Open',
+                        'CloseDate': '',
+                        'ClosingDebit': 0,
+                        'RealizedPL': 0,
+                        'Notes': bps_notes if bps_notes else ''
+                    }
+                    add_document('spreads', new_spread)
+                    logger.info("Bull put spread added: %s $%.2f/$%.2f %dct", bps_ticker, bps_short_strike, bps_long_strike, bps_contracts)
+                    st.toast("Bull Put Spread Saved! ☁️")
                     st.rerun()
 
         else:
@@ -338,6 +401,7 @@ with tab1:
     total_stock_unrealized = 0
     total_option_premium = 0
     option_risk_count = 0
+    open_spreads_count = sum(1 for s in spreads_data if s.get('Status') == 'Open')
     
     h_df = pd.DataFrame()
     if holdings_data:
@@ -381,7 +445,7 @@ with tab1:
                      (row['Type'] == 'Call' and curr > row['Strike'])
             if is_itm: option_risk_count += 1
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     
     m1.metric(
         "Inventory Unrealized P&L", 
@@ -401,6 +465,8 @@ with tab1:
         delta_color="inverse", 
         delta="Alert" if option_risk_count > 0 else "Safe"
     )
+    
+    m4.metric("Active Spreads", f"{open_spreads_count}", delta_color="off")
     
     st.divider()
 
@@ -563,7 +629,68 @@ with tab1:
     else:
         st.info("No active options.")
 
-    st.divider()
+    # --- Open Spreads Display ---
+    open_spreads = [s for s in spreads_data if s.get('Status') == 'Open']
+    if open_spreads:
+        st.subheader(" Active Bull Put Spreads")
+        spreads_df = pd.DataFrame(open_spreads)
+
+        def calc_spread_row(row):
+            curr = prices.get(row['Ticker'], 0) or 0
+            try:
+                exp_date = datetime.strptime(row['Expiry'], '%Y-%m-%d').date()
+                dte = max(1, (exp_date - date.today()).days)
+            except Exception:
+                dte = 30
+            width = float(row['ShortPutStrike']) - float(row['LongPutStrike'])
+            net_credit = float(row['NetCredit'])
+            contracts = int(row['Contracts'])
+            max_profit = net_credit * contracts * 100
+            max_loss = (width - net_credit) * contracts * 100
+            risk_per_spread = width * 100
+            unreal_pl = None
+            if curr > 0:
+                approx_short_value = max(0, float(row['ShortPutStrike']) - curr)
+                approx_long_value = max(0, float(row['LongPutStrike']) - curr)
+                approx_current_debit = approx_short_value - approx_long_value
+                unreal_pl = (net_credit - approx_current_debit) * contracts * 100
+            return pd.Series({
+                'Width': width,
+                'Max Profit': max_profit,
+                'Max Loss': max_loss,
+                'Risk/Spread': risk_per_spread,
+                'DTE': dte,
+                'Unreal. P&L': unreal_pl if unreal_pl is not None else 'N/A',
+                'Current Price': curr
+            })
+
+        spread_stats = spreads_df.apply(calc_spread_row, axis=1)
+        spreads_display = pd.concat([spreads_df, spread_stats], axis=1)
+
+        st.dataframe(
+            spreads_display[['Ticker', 'Expiry', 'ShortPutStrike', 'LongPutStrike',
+                             'Width', 'NetCredit', 'Contracts', 'Max Profit', 'Max Loss',
+                             'Risk/Spread', 'DTE', 'Unreal. P&L']]
+            .style.format({
+                'ShortPutStrike': '${:.2f}',
+                'LongPutStrike': '${:.2f}',
+                'Width': '${:.2f}',
+                'NetCredit': '${:.2f}',
+                'Contracts': '{:d}',
+                'Max Profit': '${:,.0f}',
+                'Max Loss': '${:,.0f}',
+                'Risk/Spread': '${:,.0f}',
+                'DTE': '{:d}',
+                'Unreal. P&L': '${:,.0f}' if any(
+                    isinstance(v, (int, float)) for v in spreads_display['Unreal. P&L']
+                ) else '{:s}'
+            }),
+            use_container_width=True,
+            height=200
+        )
+        st.caption("Max Profit = NetCredit x Contracts x 100. Max Loss = (Width - NetCredit) x Contracts x 100.")
+        st.divider()
+
     st.subheader("🛠️ Trade Actions")
     
     if check_auth():
@@ -662,6 +789,87 @@ with tab1:
                     
                     st.success(f"Rollover complete! Net Credit: ${net_credit:,.2f}")
                     st.rerun()
+
+        # --- Spread Close Actions ---
+        open_spreads_for_actions = [s for s in spreads_data if s.get('Status') == 'Open']
+        if open_spreads_for_actions:
+            st.markdown("---")
+            st.subheader(" Manage Spreads")
+            spread_labels = {}
+            for s in open_spreads_for_actions:
+                label = f"{s['Ticker']} {s['ShortPutStrike']}/{s['LongPutStrike']} Exp: {s['Expiry']} — {s.get('Notes', '')}"
+                spread_labels[label] = s
+
+            sel_spread_label = st.selectbox("Select Spread to Manage", list(spread_labels.keys()), key="spread_select")
+            sel_s = spread_labels[sel_spread_label]
+
+            sc1, sc2, sc3 = st.columns(3)
+
+            if sc1.button("Mark as Expired (Full Profit)"):
+                add_document('history', {
+                    'id': str(uuid.uuid4()),
+                    'Ticker': sel_s['Ticker'],
+                    'Type': 'BullPutSpread',
+                    'Strike': sel_s['ShortPutStrike'],
+                    'Premium': sel_s['NetCredit'],
+                    'Contracts': sel_s['Contracts'],
+                    'Expiry': sel_s['Expiry'],
+                    'OpenDate': sel_s['OpenDate'],
+                    'CloseDate': str(date.today()),
+                    'Result': 'Expired',
+                    'Profit': float(sel_s['NetCredit']) * int(sel_s['Contracts']) * 100,
+                    'CostPrice': 0,
+                    'Shares': 0
+                })
+                # Capture id before mutating, insert closed copy, delete original
+                old_id = sel_s['id']
+                sel_s['Status'] = 'Closed'
+                sel_s['CloseDate'] = str(date.today())
+                sel_s['ClosingDebit'] = 0
+                sel_s['RealizedPL'] = float(sel_s['NetCredit']) * int(sel_s['Contracts']) * 100
+                sel_s['id'] = str(uuid.uuid4())
+                add_document('spreads', sel_s)
+                delete_document('spreads', old_id)
+                st.success("Spread marked as expired — full profit realized.")
+                st.rerun()
+
+            if sc2.button("Delete (Error Entry)"):
+                delete_document('spreads', sel_s['id'])
+                st.warning("Spread deleted.")
+                st.rerun()
+
+            with sc3.expander(" Close Early"):
+                close_debit = st.number_input("Total Debit Paid (Per Share)", min_value=0.0, step=0.01,
+                                               help="Amount paid to close both legs of the spread.", key="spread_close_debit")
+                if st.button("Execute Early Close", key="spread_close_btn"):
+                    realized_pl = (float(sel_s['NetCredit']) - close_debit) * int(sel_s['Contracts']) * 100
+                    add_document('history', {
+                        'id': str(uuid.uuid4()),
+                        'Ticker': sel_s['Ticker'],
+                        'Type': 'BullPutSpread',
+                        'Strike': sel_s['ShortPutStrike'],
+                        'Premium': sel_s['NetCredit'],
+                        'Contracts': sel_s['Contracts'],
+                        'Expiry': sel_s['Expiry'],
+                        'OpenDate': sel_s['OpenDate'],
+                        'CloseDate': str(date.today()),
+                        'Result': 'Closed Early',
+                        'Profit': realized_pl,
+                        'CostPrice': 0,
+                        'Shares': 0
+                    })
+                    # Find the old spread id before mutating
+                    old_id = sel_s['id']
+                    sel_s['Status'] = 'Closed'
+                    sel_s['CloseDate'] = str(date.today())
+                    sel_s['ClosingDebit'] = close_debit
+                    sel_s['RealizedPL'] = realized_pl
+                    sel_s['id'] = str(uuid.uuid4())
+                    add_document('spreads', sel_s)
+                    delete_document('spreads', old_id)
+                    st.success(f"Spread closed. Realized P&L: ${realized_pl:,.2f}")
+                    st.rerun()
+
     else:
         st.info("Login to manage trades.")
 
@@ -856,6 +1064,27 @@ with tab3:
                 st.rerun()
     else:
         st.info("No completed trades.")
+
+    # --- Closed Spreads ---
+    closed_spreads = [s for s in spreads_data if s.get('Status') == 'Closed']
+    if closed_spreads:
+        st.subheader(" Closed Bull Put Spreads")
+        cs_df = pd.DataFrame(closed_spreads)
+        st.dataframe(
+            cs_df[['Ticker', 'Expiry', 'ShortPutStrike', 'LongPutStrike', 'NetCredit',
+                   'Contracts', 'OpenDate', 'CloseDate', 'ClosingDebit', 'RealizedPL', 'Notes']]
+            .style.format({
+                'ShortPutStrike': '${:.2f}',
+                'LongPutStrike': '${:.2f}',
+                'NetCredit': '${:.2f}',
+                'ClosingDebit': '${:.2f}',
+                'RealizedPL': '${:,.2f}',
+                'Contracts': '{:d}'
+            }),
+            use_container_width=True,
+            height=150
+        )
+        st.divider()
 
 # ==========================
 # TAB 4: SCREENER

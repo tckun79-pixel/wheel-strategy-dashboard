@@ -55,12 +55,31 @@ CREATE TABLE IF NOT EXISTS screener_presets (
 
 CREATE INDEX IF NOT EXISTS idx_screener_presets_owner ON screener_presets(owner);
 
+-- 3c. Spreads table (multi-leg option strategies)
+CREATE TABLE IF NOT EXISTS spreads (
+    id TEXT PRIMARY KEY,
+    "Ticker" TEXT NOT NULL,
+    "Expiry" TEXT NOT NULL,
+    "ShortPutStrike" NUMERIC NOT NULL,
+    "LongPutStrike" NUMERIC NOT NULL,
+    "NetCredit" NUMERIC NOT NULL,
+    "Contracts" INTEGER NOT NULL,
+    "OpenDate" TEXT NOT NULL,
+    "Status" TEXT NOT NULL DEFAULT 'Open',
+    "CloseDate" TEXT,
+    "ClosingDebit" NUMERIC,
+    "RealizedPL" NUMERIC,
+    "Notes" TEXT DEFAULT '',
+    "owner" TEXT NOT NULL DEFAULT 'admin'
+);
+
 -- 4. Row Level Security (RLS) Policies
 -- Enable RLS on all tables
 ALTER TABLE positions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE holdings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE screener_presets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE spreads ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies: Users can only access their own records based on owner field
 -- For single-user mode, owner='admin'. When adding multi-user auth, set owner appropriately.
@@ -68,6 +87,19 @@ CREATE POLICY "Users can access own positions" ON positions FOR ALL USING (owner
 CREATE POLICY "Users can access own history" ON history FOR ALL USING (owner = current_setting('app.current_user', true)::text);
 CREATE POLICY "Users can access own holdings" ON holdings FOR ALL USING (owner = current_setting('app.current_user', true)::text);
 CREATE POLICY "Users can access own presets" ON screener_presets FOR ALL USING (owner = current_setting('app.current_user', true)::text);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE tablename = 'spreads' AND policyname = 'Users can access own spreads'
+    ) THEN
+        CREATE POLICY "Users can access own spreads" ON spreads
+            FOR ALL USING (owner = current_setting('app.current_user', true)::text);
+    END IF;
+END
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_spreads_owner ON spreads(owner);
 
 -- For simplicity in single-user mode without proper auth, the app bypasses RLS by not setting app.current_user.
 -- In that case, all records with owner='admin' are accessible to anyone with DB access.
