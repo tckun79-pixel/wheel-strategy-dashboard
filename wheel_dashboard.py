@@ -142,7 +142,10 @@ def get_db():
     try:
         # Try secrets first, fall back to env vars
         supabase_url = st.secrets.get("supabase_url", SUPABASE_URL)
-        supabase_key = st.secrets.get("supabase_key", os.environ.get("SUPABASE_KEY", ""))
+        supabase_key = st.secrets.get(
+            "SUPABASE_KEY",
+            st.secrets.get("supabase_key", os.environ.get("SUPABASE_KEY", ""))
+        )
 
         if not supabase_key:
             logger.error("'supabase_key' not found in secrets or SUPABASE_KEY env var")
