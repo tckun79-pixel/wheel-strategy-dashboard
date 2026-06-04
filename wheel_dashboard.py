@@ -707,7 +707,7 @@ with tab1:
             sel = pos_list[selected_label]
             
             c1, c2, c3, c4 = st.columns(4)
-            if c1.button("Mark as Expired (Full Profit)"):
+            if c1.button("Mark as Expired (Full Profit)", key=f"leg_expired_{sel['id']}"):
                 hist_entry = sel.copy()
                 hist_entry['CloseDate'] = str(date.today())
                 hist_entry['Result'] = "Expired"
@@ -717,7 +717,7 @@ with tab1:
                 st.success("Moved to History!")
                 st.rerun()
                 
-            if c2.button("Mark as Assigned"):
+            if c2.button("Mark as Assigned", key=f"leg_assigned_{sel['id']}"):
                 hist_entry = sel.copy()
                 hist_entry['CloseDate'] = str(date.today())
                 hist_entry['Result'] = "Assigned"
@@ -739,14 +739,14 @@ with tab1:
                 st.success("Assignment Processed!")
                 st.rerun()
 
-            if c3.button("Delete (Error Entry)"):
+            if c3.button("Delete (Error Entry)", key=f"leg_delete_{sel['id']}"):
                 delete_document('positions', sel['id'])
                 st.warning("Deleted.")
                 st.rerun()
 
             with c4.expander("💸 Close Early"):
                 close_price = st.number_input("Price Paid/Received (Per Share)", min_value=0.0, step=0.01, help="The price you paid to buy back (BTC) or received to sell (STC) the option.")
-                if st.button("Execute Early Close"):
+                if st.button("Execute Early Close", key=f"leg_close_early_{sel['id']}"):
                     hist_entry = sel.copy()
                     hist_entry['CloseDate'] = str(date.today())
                     hist_entry['Result'] = "Closed Early"
@@ -808,7 +808,7 @@ with tab1:
 
             sc1, sc2, sc3 = st.columns(3)
 
-            if sc1.button("Mark as Expired (Full Profit)"):
+            if sc1.button("Mark as Expired (Full Profit)", key=f"spread_expired_{sel_s['id']}"):
                 add_document('history', {
                     'id': str(uuid.uuid4()),
                     'Ticker': sel_s['Ticker'],
@@ -836,7 +836,7 @@ with tab1:
                 st.success("Spread marked as expired — full profit realized.")
                 st.rerun()
 
-            if sc2.button("Delete (Error Entry)"):
+            if sc2.button("Delete (Error Entry)", key=f"spread_delete_{sel_s['id']}"):
                 delete_document('spreads', sel_s['id'])
                 st.warning("Spread deleted.")
                 st.rerun()
