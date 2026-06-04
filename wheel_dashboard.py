@@ -196,27 +196,45 @@ def load_collection(collection_name, owner: str = None):
     except Exception as e:
         # Fallback: try without owner filter (for existing data without owner field)
         logger.warning("Owner filter failed for %s, falling back: %s", collection_name, e)
-        result = db.table(collection_name).select("*").execute()
-        if not result.data:
+        try:
+            result = db.table(collection_name).select("*").execute()
+            if not result.data:
+                return []
+            return result.data
+        except Exception as fbe:
+            logger.error("Fallback also failed for %s: %s", collection_name, fbe)
             return []
-        return result.data
 
-def add_document(collection_name, data, owner: str = None):
-    """Insert a document into a Supabase table with owner field."""
-    if not db: return
+def add_document(collection_name, data, owner: str = None) -> bool:
+    """Insert a document into a Supabase table with owner field. Returns True on success, False on failure."""
+    if not db:
+        logger.warning("add_document skipped: db is None")
+        return False
     owner = owner or get_current_owner()
     doc_id = data.get('id', str(uuid.uuid4()))
     data['id'] = doc_id
     data['owner'] = owner
-    db.table(collection_name).insert(data).execute()
-    logger.info("Added document to %s: id=%s, owner=%s", collection_name, doc_id, owner)
+    try:
+        db.table(collection_name).insert(data).execute()
+        logger.info("Added document to %s: id=%s, owner=%s", collection_name, doc_id, owner)
+        return True
+    except Exception as e:
+        logger.error("add_document failed for %s: %s", collection_name, e)
+        return False
 
-def delete_document(collection_name, doc_id, owner: str = None):
-    """Delete a document by id (filtered by owner for safety)."""
-    if not db: return
+def delete_document(collection_name, doc_id, owner: str = None) -> bool:
+    """Delete a document by id (filtered by owner for safety). Returns True on success, False on failure."""
+    if not db:
+        logger.warning("delete_document skipped: db is None")
+        return False
     owner = owner or get_current_owner()
-    db.table(collection_name).delete().eq("id", doc_id).eq("owner", owner).execute()
-    logger.info("Deleted document from %s: id=%s, owner=%s", collection_name, doc_id, owner)
+    try:
+        db.table(collection_name).delete().eq("id", doc_id).eq("owner", owner).execute()
+        logger.info("Deleted document from %s: id=%s, owner=%s", collection_name, doc_id, owner)
+        return True
+    except Exception as e:
+        logger.error("delete_document failed for %s: %s", collection_name, e)
+        return False
 
 # --- Market Data (with retry & rate limiting) ---
 def get_current_price_with_retry(ticker: str) -> Optional[float]:
@@ -318,10 +336,12 @@ if check_auth():
                         'Expiry': str(expiry_in), 
                         'OpenDate': str(date.today())
                     }
-                    add_document('positions', new_trade)
-                    logger.info("Option trade added: %s %s $%s", ticker_in, type_in, strike_in)
-                    st.toast("Option Saved! ☁️")
-                    st.rerun()
+                    if add_document('positions', new_trade):
+                        logger.info("Option trade added: %s %s $%s", ticker_in, type_in, strike_in)
+                        st.toast("Option Saved! ☁️")
+                        st.rerun()
+                    else:
+                        st.error("Failed to save option trade — database unavailable.")
 
         elif add_mode == "Bull Put Spread":
             st.subheader("Add Bull Put Spread")
@@ -359,10 +379,12 @@ if check_auth():
                         'RealizedPL': 0,
                         'Notes': bps_notes if bps_notes else ''
                     }
-                    add_document('spreads', new_spread)
-                    logger.info("Bull put spread added: %s $%.2f/$%.2f %dct", bps_ticker, bps_short_strike, bps_long_strike, bps_contracts)
-                    st.toast("Bull Put Spread Saved! ☁️")
-                    st.rerun()
+                    if add_document('spreads', new_spread):
+                        logger.info("Bull put spread added: %s $%.2f/$%.2f %dct", bps_ticker, bps_short_strike, bps_long_strike, bps_contracts)
+                        st.toast("Bull Put Spread Saved! ☁️")
+                        st.rerun()
+                    else:
+                        st.error("Failed to save bull put spread — database unavailable.")
 
         else:
             st.subheader("Add Stock Inventory")
@@ -386,10 +408,12 @@ if check_auth():
                         'CostPrice': s_cost,
                         'Date': str(s_date)
                     }
-                    add_document('holdings', new_holding)
-                    logger.info("Stock holding added: %s %d shares @ $%s", s_ticker, s_shares, s_cost)
-                    st.toast("Stock Inventory Added! ☁️")
-                    st.rerun()
+                    if add_document('holdings', new_holding):
+                        logger.info("Stock holding added: %s %d shares @ $%s", s_ticker, s_shares, s_cost)
+                        st.toast("Stock Inventory Added! ☁️")
+                        st.rerun()
+                    else:
+                        st.error("Failed to save stock holding — database unavailable.")
 else:
     st.sidebar.info("Login to add new trades or stocks.")
 

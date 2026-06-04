@@ -6,3 +6,4 @@ pyyaml
 matplotlib
 mibian
 scipy
+pytest
